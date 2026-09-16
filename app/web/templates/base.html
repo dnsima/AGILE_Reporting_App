@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body data-api-prefix="{{ api_prefix }}">
+  {% block body %}{% endblock %}
+  <script>window.AGILE = { apiPrefix: "{{ api_prefix }}", version: "{{ version }}" };</script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

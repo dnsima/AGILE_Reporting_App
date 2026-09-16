@@ -1,0 +1,6 @@
+code,name,description,sort_order
+PDO,Project Development Objective,"Headline outcome indicators tracking achievement of the AGILE development objective.",1
+C1,Component 1 - Creating Safe and Accessible Learning Spaces,"Infrastructure, school environment, teaching workforce and school governance outputs.",2
+C2,Component 2 - Fostering an Enabling Environment for Girls,"Demand-side interventions: transfers, scholarships, safe spaces, mentoring and community mobilisation.",3
+C3,Component 3 - Project Management and System Strengthening,"Institutional capacity, fiduciary performance, EMIS/M&E systems and implementation efficiency.",4
+XC,"Cross-cutting - Safeguards, Gender and Grievance Redress","Environmental and social safeguards, GBV/SEA-SH response and grievance redress performance.",5

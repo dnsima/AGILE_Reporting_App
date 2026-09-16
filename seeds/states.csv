@@ -1,0 +1,38 @@
+code,name,geopolitical_zone,cohort_code
+AB,Abia,South East,LIMITED
+AD,Adamawa,North East,ADDITIONAL
+AK,Akwa Ibom,South South,LIMITED
+AN,Anambra,South East,LIMITED
+BA,Bauchi,North East,ADDITIONAL
+BY,Bayelsa,South South,LIMITED
+BE,Benue,North Central,LIMITED
+BO,Borno,North East,ORIGINAL
+CR,Cross River,South South,LIMITED
+DE,Delta,South South,LIMITED
+EB,Ebonyi,South East,LIMITED
+ED,Edo,South South,LIMITED
+EK,Ekiti,South West,ORIGINAL
+EN,Enugu,South East,LIMITED
+FC,FCT,North Central,LIMITED
+GO,Gombe,North East,ADDITIONAL
+IM,Imo,South East,LIMITED
+JI,Jigawa,North West,ADDITIONAL
+KD,Kaduna,North West,ORIGINAL
+KN,Kano,North West,ORIGINAL
+KT,Katsina,North West,ORIGINAL
+KE,Kebbi,North West,ORIGINAL
+KO,Kogi,North Central,LIMITED
+KW,Kwara,North Central,ADDITIONAL
+LA,Lagos,South West,LIMITED
+NA,Nasarawa,North Central,ADDITIONAL
+NI,Niger,North Central,ADDITIONAL
+OG,Ogun,South West,LIMITED
+ON,Ondo,South West,LIMITED
+OS,Osun,South West,LIMITED
+OY,Oyo,South West,LIMITED
+PL,Plateau,North Central,ORIGINAL
+RI,Rivers,South South,LIMITED
+SO,Sokoto,North West,ADDITIONAL
+TA,Taraba,North East,ADDITIONAL
+YO,Yobe,North East,ADDITIONAL
+ZA,Zamfara,North West,ADDITIONAL

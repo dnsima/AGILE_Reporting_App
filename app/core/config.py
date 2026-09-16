@@ -1,0 +1,95 @@
+"""Application configuration.
+
+Values are read from environment variables (or a local ``.env`` file). See
+``.env.example`` for the full documented list.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
+
+    # --- General ---------------------------------------------------------
+    app_name: str = "AGILE Reporting Platform"
+    environment: str = "development"
+    debug: bool = True
+    api_prefix: str = "/api/v1"
+
+    # --- Database --------------------------------------------------------
+    database_url: str = "sqlite:///./storage/agile.db"
+    sql_echo: bool = False
+
+    # --- Security --------------------------------------------------------
+    secret_key: str = "change-me-in-production-please-use-a-long-random-string"
+    access_token_ttl_minutes: int = 720
+    bootstrap_admin_email: str = "admin@agile.gov.ng"
+    bootstrap_admin_password: str = "ChangeMe!2024"
+
+    # --- Storage ---------------------------------------------------------
+    upload_dir: Path = BASE_DIR / "storage" / "uploads"
+    report_dir: Path = BASE_DIR / "storage" / "reports"
+    max_upload_mb: int = 50
+
+    # --- Data quality thresholds ----------------------------------------
+    dqa_minimum_score: float = 60.0
+    consistency_change_threshold_pct: float = 200.0
+    accuracy_target_ratio_pct: float = 300.0
+    outlier_zscore_threshold: float = 3.0
+
+    # --- Logging ---------------------------------------------------------
+    log_level: str = "INFO"
+    log_json: bool = True
+
+    # --- CORS ------------------------------------------------------------
+    cors_origins: str = "*"
+
+    # --- Seeds -----------------------------------------------------------
+    seed_dir: Path = BASE_DIR / "seeds"
+
+    @field_validator("upload_dir", "report_dir", "seed_dir", mode="before")
+    @classmethod
+    def _expand(cls, value: object) -> object:
+        if isinstance(value, str):
+            path = Path(value).expanduser()
+            return path if path.is_absolute() else (BASE_DIR / path).resolve()
+        return value
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        raw = (self.cors_origins or "").strip()
+        if not raw or raw == "*":
+            return ["*"]
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.lower() in {"production", "prod"}
+
+    @property
+    def max_upload_bytes(self) -> int:
+        return self.max_upload_mb * 1024 * 1024
+
+    def ensure_directories(self) -> None:
+        for directory in (self.upload_dir, self.report_dir):
+            Path(directory).mkdir(parents=True, exist_ok=True)
+
+
+@lru_cache
+def get_settings() -> Settings:
+    settings = Settings()
+    settings.ensure_directories()
+    return settings
+
+
+settings = get_settings()

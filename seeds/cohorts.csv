@@ -1,0 +1,4 @@
+code,name,description,financing_window,start_year,sort_order
+ORIGINAL,Original Financing States,"States onboarded under the original AGILE financing agreement; longest implementation history and the fullest results-framework reporting obligation.",Original Financing,2020,1
+ADDITIONAL,Additional Financing States,"States onboarded under the AGILE Additional Financing window; reporting obligations phase in from their onboarding period.",Additional Financing,2023,2
+LIMITED,Limited Financing States,"States participating under a limited/partial financing arrangement; report a reduced core indicator set.",Limited Financing,2024,3

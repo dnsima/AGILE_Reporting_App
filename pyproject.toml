@@ -1,0 +1,32 @@
+[project]
+name = "agile-reporting-platform"
+version = "1.0.0"
+description = "Ingests, validates, analyses and visualises AGILE state reporting data for Nigeria's 36 states and the FCT."
+requires-python = ">=3.11"
+readme = "README.md"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = [".venv", "storage"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "B008",   # FastAPI declares dependencies as call defaults by design
+    "E731",
+    "UP017",  # `timezone.utc` reads more clearly than the `UTC` alias
+    "UP042",  # the custom StrEnum base adds __str__ behaviour we rely on
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+# Relationship annotations must stay quoted: the related classes are imported
+# only under TYPE_CHECKING, so unquoting them breaks mapper configuration.
+"app/models/*" = ["UP037"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q --strict-markers"
+filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]

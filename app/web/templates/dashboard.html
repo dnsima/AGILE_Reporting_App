@@ -1,0 +1,246 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · {{ app_name }}{% endblock %}
+{% block body %}
+<div class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">A</span>
+      <div>
+        <strong>{{ app_name }}</strong>
+        <span class="brand-sub">National M&amp;E dashboard · 36 states + FCT</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="live-dot" id="live-dot" title="Live connection status"></span>
+      <span class="live-label" id="live-label">connecting…</span>
+      <span class="user-chip" id="user-chip">—</span>
+      <button class="btn ghost" id="logout-btn" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-view="overview" role="tab">Overview</button>
+    <button class="tab" data-view="kpis" role="tab">KPI performance</button>
+    <button class="tab" data-view="cohorts" role="tab">Cohorts</button>
+    <button class="tab" data-view="quality" role="tab">Data quality</button>
+    <button class="tab" data-view="states" role="tab">States</button>
+    <button class="tab" data-view="upload" role="tab">Upload</button>
+    <button class="tab" data-view="reports" role="tab">Reports</button>
+  </nav>
+
+  <section class="filters" id="filters">
+    <label>Period
+      <select id="filter-period"></select>
+    </label>
+    <label>Cohort
+      <select id="filter-cohort"><option value="">All cohorts</option></select>
+    </label>
+    <label>State
+      <select id="filter-state"><option value="">All states</option></select>
+    </label>
+    <label>Category
+      <select id="filter-category"><option value="">All categories</option></select>
+    </label>
+    <label>KPI
+      <select id="filter-indicator"></select>
+    </label>
+    <button class="btn ghost" id="reset-filters" type="button">Reset</button>
+    <span class="filter-status" id="filter-status"></span>
+  </section>
+
+  <main class="content">
+    <!-- Overview ---------------------------------------------------------->
+    <section class="view active" id="view-overview">
+      <div class="tile-grid" id="kpi-tiles"></div>
+      <div class="panel-grid">
+        <article class="panel">
+          <header><h2>National DQA by dimension</h2><span class="hint">Seven-dimension scorecard</span></header>
+          <div id="chart-dqa-dimensions" class="chart"></div>
+        </article>
+        <article class="panel">
+          <header><h2>Cohort achievement</h2><span class="hint">Average KPI achievement vs target</span></header>
+          <div id="chart-cohort-achievement" class="chart"></div>
+        </article>
+      </div>
+      <article class="panel">
+        <header><h2>Reporting status</h2><span class="hint" id="reporting-caption"></span></header>
+        <div id="reporting-status"></div>
+      </article>
+      <article class="panel">
+        <header><h2>Live activity</h2><span class="hint">Dashboard refreshes as states submit</span></header>
+        <ul class="activity" id="activity-feed"><li class="muted">Waiting for events…</li></ul>
+      </article>
+    </section>
+
+    <!-- KPI performance --------------------------------------------------->
+    <section class="view" id="view-kpis">
+      <div class="panel-grid">
+        <article class="panel">
+          <header><h2 id="trend-title">Trend</h2><span class="hint">Longitudinal series for the selected KPI</span></header>
+          <div id="chart-trend" class="chart"></div>
+        </article>
+        <article class="panel">
+          <header><h2>State contribution</h2><span class="hint">Share of the national result</span></header>
+          <div id="chart-contribution" class="chart"></div>
+        </article>
+      </div>
+      <article class="panel">
+        <header>
+          <h2>Three-layer analysis</h2>
+          <span class="hint" id="indicator-caption"></span>
+        </header>
+        <div id="indicator-analysis"></div>
+      </article>
+      <article class="panel">
+        <header><h2>Scorecard — all indicators</h2><span class="hint">Value, target, achievement and status</span></header>
+        <div class="table-scroll" id="scorecard-table"></div>
+      </article>
+    </section>
+
+    <!-- Cohorts ------------------------------------------------------------>
+    <section class="view" id="view-cohorts">
+      <article class="panel">
+        <header><h2>Cohort comparison</h2><span class="hint">KPI, DQA, contribution, timeliness and completeness</span></header>
+        <div class="table-scroll" id="cohort-table"></div>
+      </article>
+      <div class="panel-grid">
+        <article class="panel">
+          <header><h2>Reporting rate by cohort</h2></header>
+          <div id="chart-cohort-reporting" class="chart"></div>
+        </article>
+        <article class="panel">
+          <header><h2>DQA score by cohort</h2></header>
+          <div id="chart-cohort-dqa" class="chart"></div>
+        </article>
+      </div>
+      <article class="panel">
+        <header><h2>Within-cohort ranking</h2><span class="hint">Select a cohort in the filter bar</span></header>
+        <div class="table-scroll" id="within-cohort-table"></div>
+      </article>
+    </section>
+
+    <!-- Data quality ------------------------------------------------------->
+    <section class="view" id="view-quality">
+      <article class="panel">
+        <header><h2>National DQA summary</h2><span class="hint" id="dqa-caption"></span></header>
+        <div id="dqa-summary"></div>
+      </article>
+      <article class="panel">
+        <header><h2>State DQA scorecards</h2></header>
+        <div class="table-scroll" id="dqa-table"></div>
+      </article>
+      <article class="panel">
+        <header><h2>DQA heatmap</h2><span class="hint">States × reporting periods</span></header>
+        <div class="chart" id="chart-dqa-heatmap"></div>
+      </article>
+      <article class="panel">
+        <header><h2>Most frequent findings</h2></header>
+        <div class="table-scroll" id="common-issues"></div>
+      </article>
+    </section>
+
+    <!-- States -------------------------------------------------------------->
+    <section class="view" id="view-states">
+      <article class="panel">
+        <header><h2>State performance ranking</h2><span class="hint">Average achievement across indicators in scope</span></header>
+        <div class="table-scroll" id="state-table"></div>
+      </article>
+      <article class="panel">
+        <header><h2>Performance heatmap</h2><span class="hint">States × KPIs, coloured by achievement</span></header>
+        <div class="chart" id="chart-heatmap"></div>
+      </article>
+    </section>
+
+    <!-- Upload --------------------------------------------------------------->
+    <section class="view" id="view-upload">
+      <div class="panel-grid">
+        <article class="panel">
+          <header><h2>Upload a state template</h2><span class="hint">.xlsx, .xls, .csv or .tsv</span></header>
+          <form id="upload-form" class="stack">
+            <label>State
+              <select id="upload-state" required></select>
+            </label>
+            <label>Reporting period
+              <select id="upload-period" required></select>
+            </label>
+            <label>File
+              <input type="file" id="upload-file" accept=".xlsx,.xls,.xlsm,.csv,.tsv" required>
+            </label>
+            <label>Notes
+              <textarea id="upload-notes" rows="2" placeholder="Optional context for reviewers"></textarea>
+            </label>
+            <label class="inline"><input type="checkbox" id="upload-approve"> Approve immediately if it passes validation</label>
+            <div class="row">
+              <button class="btn primary" type="submit" id="upload-btn">Ingest</button>
+              <button class="btn ghost" type="button" id="template-btn">Download template</button>
+            </div>
+          </form>
+        </article>
+        <article class="panel">
+          <header><h2>Ingestion result</h2><span class="hint">Mapping diagnostics and validation findings</span></header>
+          <div id="upload-result" class="muted">No upload yet in this session.</div>
+        </article>
+      </div>
+      <article class="panel">
+        <header><h2>Recent submissions</h2></header>
+        <div class="table-scroll" id="submissions-table"></div>
+      </article>
+    </section>
+
+    <!-- Reports --------------------------------------------------------------->
+    <section class="view" id="view-reports">
+      <div class="panel-grid">
+        <article class="panel">
+          <header><h2>Generate a routine report</h2><span class="hint">Monthly · quarterly · semi-annual · annual</span></header>
+          <form id="report-form" class="stack">
+            <label>Scope
+              <select id="report-scope">
+                <option value="NATIONAL">National</option>
+                <option value="COHORT">Cohort</option>
+                <option value="STATE">State</option>
+              </select>
+            </label>
+            <label>Scope reference
+              <select id="report-scope-ref"><option value="">—</option></select>
+            </label>
+            <label>Period
+              <select id="report-period"></select>
+            </label>
+            <label>Indicator category
+              <select id="report-category"><option value="">All 70 indicators</option></select>
+            </label>
+            <fieldset class="formats">
+              <legend>Formats</legend>
+              <label class="inline"><input type="checkbox" value="markdown" checked> Markdown</label>
+              <label class="inline"><input type="checkbox" value="html" checked> HTML</label>
+              <label class="inline"><input type="checkbox" value="pdf"> PDF</label>
+            </fieldset>
+            <fieldset class="formats">
+              <legend>Sections</legend>
+              <label class="inline"><input type="checkbox" id="report-dqa" checked> DQA findings</label>
+              <label class="inline"><input type="checkbox" id="report-trends" checked> Trend analysis</label>
+              <label class="inline"><input type="checkbox" id="report-narratives" checked> KPI narratives</label>
+            </fieldset>
+            <button class="btn primary" type="submit" id="report-btn">Generate</button>
+          </form>
+        </article>
+        <article class="panel">
+          <header><h2>Report output</h2></header>
+          <div id="report-result" class="muted">No report generated in this session.</div>
+        </article>
+      </div>
+      <article class="panel">
+        <header><h2>Report library</h2></header>
+        <div class="table-scroll" id="reports-table"></div>
+      </article>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" hidden></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/charts.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/dashboard.js"></script>
+{% endblock %}

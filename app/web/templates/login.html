@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Sign in · {{ app_name }}{% endblock %}
+{% block body %}
+<main class="auth-shell">
+  <form class="auth-card" id="login-form" autocomplete="on">
+    <div class="auth-brand">
+      <span class="auth-mark">A</span>
+      <div>
+        <h1>{{ app_name }}</h1>
+        <p>Adolescent Girls Initiative for Learning and Empowerment</p>
+      </div>
+    </div>
+
+    <label for="email">Email address</label>
+    <input id="email" name="email" type="email" required autocomplete="username"
+           placeholder="you@agile.gov.ng">
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" required
+           autocomplete="current-password" placeholder="••••••••">
+
+    <button type="submit" class="btn primary" id="login-btn">Sign in</button>
+    <p class="auth-error" id="login-error" hidden></p>
+
+    <p class="auth-foot">
+      Roles: NPCU · State PIU · M&amp;E · Admin.<br>
+      Machine integrations authenticate with an <code>X-API-Key</code> header.
+    </p>
+  </form>
+</main>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/api.js"></script>
+<script src="/static/js/login.js"></script>
+{% endblock %}
