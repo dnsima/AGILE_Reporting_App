@@ -35,11 +35,14 @@ pip install -r requirements.txt
 
 cp .env.example .env          # then edit SECRET_KEY and the admin password
 
-python -m scripts.seed        # cohorts, 37 states, 70 KPIs, reporting calendar
+python -m scripts.seed        # cohorts, 21 states, the 53-indicator framework, calendar
 python -m scripts.demo        # optional: realistic demonstration data
 
 uvicorn app.main:app --reload
 ```
+
+On Windows the activate line is `.venv\Scripts\activate` and the copy is
+`copy .env.example .env`; everything else is the same.
 
 | URL | What it is |
 |---|---|
@@ -52,6 +55,56 @@ The seed script prints the bootstrap administrator credentials (from
 `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`). **Change the password
 immediately after first sign-in**, and set a strong `SECRET_KEY` before serving
 real traffic.
+
+---
+
+## Updating an existing install
+
+Three things move independently, and only one of them looks after itself.
+
+| | Automatic? | What to run |
+|---|---|---|
+| **Database schema** | Yes | Nothing. New tables and columns are added on startup. |
+| **Application code** | No | `git pull`, or download the branch as a ZIP and replace the folder. |
+| **Reference data** | No | `python -m scripts.seed` |
+| **Reported figures** | No | They stay as they are. |
+
+```bash
+git pull                             # or replace the folder from a fresh ZIP
+pip install -r requirements.txt      # in case dependencies moved
+python -m scripts.seed               # refresh the catalogue, states and rules
+uvicorn app.main:app --reload
+```
+
+`init_db()` adds any table or column the models declare and the database does
+not have. It only ever adds — never drops, renames or retypes — and it skips
+anything it cannot add without inventing a value for the rows already there.
+So a schema change never arrives as "no such column".
+
+Re-seeding is an **upgrade**, not an accumulation: an indicator or state the
+seed files no longer carry is retired rather than left active, so a framework
+revision cannot leave the previous catalogue running alongside the new one.
+Retired, not deleted — submissions, targets and findings still point at them,
+and a report published last quarter has to stay readable.
+
+**If your database predates the 53-indicator recode** it holds the old `KPI-0xx`
+catalogue and figures reported against it. Re-seeding retires those codes
+correctly, but the figures underneath them refer to indicators that no longer
+exist, so the honest move is to start clean:
+
+```bash
+python -m scripts.seed --reset       # destructive: drops everything first
+
+python -m scripts.load_npcu_models \
+    --q2 "AGILE_Q2_2026_Analysis_Model_Flagged.xlsx" \
+    --q1 "AGILE_Q1_2026_Analysis_Model_v3_5.xlsx" \
+    --crosswalk "AGILE_Q1_vs_Q2_2026_Model_Comparison.xlsx"
+```
+
+That loads Q2 as the current period and Q1 as history, translating Q1's codes
+through the crosswalk so period-over-period comparisons work across the recode.
+`--skip-q1` loads Q2 on its own. Or run `python -m scripts.demo` instead for
+generated data on the same 53-indicator framework.
 
 ---
 
@@ -240,6 +293,10 @@ python -m scripts.seed --reset                      # drop everything first (des
 python -m scripts.demo                              # last 4 quarters, all states
 python -m scripts.demo --periods 2026-Q1 2026-Q2    # specific periods
 python -m scripts.demo --year 2026 --format csv     # a whole year, CSV templates
+
+python -m scripts.load_npcu_models --q2 MODEL.xlsx --q1 MODEL.xlsx \
+    --crosswalk COMPARISON.xlsx                     # the real NPCU returns
+python -m scripts.build_seeds                       # rebuild seeds/ from the workbooks
 ```
 
 `scripts/demo.py` pushes generated templates through the **real** ingestion

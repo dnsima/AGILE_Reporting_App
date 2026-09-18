@@ -84,10 +84,25 @@ def seed_cohorts(db) -> int:
     return created
 
 
+def _retire(db, existing: dict, seen: set[str], label: str) -> list[str]:
+    """Deactivate rows the seed files no longer carry.
+
+    Never deletes: submissions, targets and findings already point at them, and
+    a report published last quarter has to stay readable.
+    """
+    retired = []
+    for code, row in existing.items():
+        if code not in seen and row.is_active:
+            row.is_active = False
+            retired.append(code)
+    return retired
+
+
 def seed_states(db) -> int:
     cohorts = {row.code: row for row in db.scalars(select(Cohort))}
     existing = {row.code: row for row in db.scalars(select(State))}
     created = 0
+    seen: set[str] = set()
     for row in _rows("states.csv"):
         state = existing.get(row["code"])
         if state is None:
@@ -98,12 +113,18 @@ def seed_states(db) -> int:
         state.geopolitical_zone = row["geopolitical_zone"]
         cohort = cohorts.get(row["cohort_code"])
         state.cohort_id = cohort.id if cohort else None
-        # States that have not begun reporting stay inactive, so they are not
-        # counted as missing submissions.
         # Participating from the day it is named; reporting once it starts.
         state.is_active = True
         state.is_reporting = _as_bool(row.get("is_reporting", "1"))
+        seen.add(row["code"])
+
+    retired = _retire(db, existing, seen, "state")
     db.flush()
+    if retired:
+        logger.info(
+            "retired states no longer in the seed list",
+            extra={"count": len(retired), "codes": sorted(retired)},
+        )
     return created
 
 
@@ -172,6 +193,7 @@ def seed_indicators(db) -> int:
     subcomponents = {row.code: row for row in db.scalars(select(Subcomponent))}
     existing = {row.code: row for row in db.scalars(select(Indicator))}
     created = 0
+    seen: set[str] = set()
     for row in _rows("indicators.csv"):
         indicator = existing.get(row["code"])
         if indicator is None:
@@ -207,7 +229,20 @@ def seed_indicators(db) -> int:
         indicator.aliases = _as_list(row.get("aliases", ""))
         indicator.is_core = True
         indicator.is_active = True
+        seen.add(row["code"])
+
+    # Re-seeding has to be an upgrade, not an accumulation. A framework
+    # revision drops indicators, and the 2026 recode replaced every code: left
+    # alone, the old catalogue stays active beside the new one and pollutes
+    # every template, completeness check and national total. Retired rather
+    # than deleted, because submissions already reference them.
+    retired = _retire(db, existing, seen, "indicator")
     db.flush()
+    if retired:
+        logger.info(
+            "retired indicators no longer in the catalogue",
+            extra={"count": len(retired), "codes": sorted(retired)[:20]},
+        )
     return created
 
 

@@ -37,10 +37,20 @@ from app.services.ingestion.pipeline import approve_submission, ingest_manual  #
 
 logger = get_logger("load")
 
-UPLOADS = Path("/root/.claude/uploads/2e5b36ef-43ca-515f-bb8f-925304562963")
-Q2_MODEL = UPLOADS / "d0b593e1-AGILE_Q2_2026_Analysis_Model_Flagged.xlsx"
-Q1_MODEL = UPLOADS / "d693b3b0-AGILE_Q1_2026_Analysis_Model_v3_5.xlsx"
-CROSSWALK = UPLOADS / "d2398a92-AGILE_Q1_vs_Q2_2026_Model_Comparison.xlsx"
+#: The NPCU workbooks, named on the command line. Anyone running this has the
+#: files somewhere of their own, so there is no useful default path to guess.
+WORKBOOKS: dict[str, Path] = {}
+
+
+def _workbook(name: str) -> Path:
+    path = WORKBOOKS.get(name)
+    if path is None or not path.exists():
+        raise SystemExit(
+            f"The {name} workbook was not found. Pass it with --{name}, e.g.\n"
+            f'  python -m scripts.load_npcu_models --{name} '
+            f'"C:\\AGILE\\AGILE_Q2_2026_Analysis_Model_Flagged.xlsx"'
+        )
+    return path
 
 SHEETS = ["PDO", "Component 1", "Component 2", "Component 3"]
 CODE_PATTERN = re.compile(r"^(PDO|C\d)-")
@@ -77,7 +87,7 @@ def read_model(path: Path) -> tuple[dict[str, dict[str, object]], list[str]]:
 
 def read_crosswalk() -> dict[str, list[str]]:
     """``{q2_old_code: [q1_codes that feed it]}`` for comparable dispositions."""
-    workbook = load_workbook(CROSSWALK, data_only=True)
+    workbook = load_workbook(_workbook("crosswalk"), data_only=True)
     mapping: dict[str, list[str]] = defaultdict(list)
     for row in workbook["Crosswalk"].iter_rows(min_row=3, values_only=True):
         q1_code = str(row[0] or "").strip()
@@ -97,7 +107,7 @@ def read_crosswalk() -> dict[str, list[str]]:
 
 def record_lineage(db) -> int:
     """Persist the full crosswalk, including the non-comparable dispositions."""
-    workbook = load_workbook(CROSSWALK, data_only=True)
+    workbook = load_workbook(_workbook("crosswalk"), data_only=True)
     existing = {
         (row.predecessor_code, row.successor_code)
         for row in db.scalars(select(IndicatorLink))
@@ -130,7 +140,7 @@ def record_lineage(db) -> int:
 
 def load_targets(db, period_code: str) -> int:
     """State-level targets are not published per state, so load national ones."""
-    workbook = load_workbook(Q2_MODEL, data_only=True)
+    workbook = load_workbook(_workbook("q2"), data_only=True)
     worksheet = workbook["National Summary"]
     period = reference.get_period_by_code(db, period_code)
     by_legacy = {i.legacy_code: i for i in db.scalars(select(Indicator)) if i.legacy_code}
@@ -244,9 +254,40 @@ def load_period(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Load the NPCU quarterly models")
-    parser.add_argument("--skip-q1", action="store_true")
+    parser = argparse.ArgumentParser(
+        description="Load the NPCU quarterly analysis models into the platform",
+        epilog=(
+            'Example:\n'
+            '  python -m scripts.load_npcu_models \\\n'
+            '      --q2 "AGILE_Q2_2026_Analysis_Model_Flagged.xlsx" \\\n'
+            '      --q1 "AGILE_Q1_2026_Analysis_Model_v3_5.xlsx" \\\n'
+            '      --crosswalk "AGILE_Q1_vs_Q2_2026_Model_Comparison.xlsx"'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--q2", type=Path, help="Q2 2026 analysis model (.xlsx)")
+    parser.add_argument("--q1", type=Path, help="Q1 2026 analysis model (.xlsx)")
+    parser.add_argument(
+        "--crosswalk", type=Path, help="Q1 vs Q2 model comparison (.xlsx)"
+    )
+    parser.add_argument(
+        "--skip-q1",
+        action="store_true",
+        help="Load Q2 only; no Q1 history and no period-over-period comparison",
+    )
     args = parser.parse_args()
+
+    for name in ("q2", "q1", "crosswalk"):
+        value = getattr(args, name)
+        if value is not None:
+            WORKBOOKS[name] = value.expanduser().resolve()
+    if args.q2 is None:
+        raise SystemExit("--q2 is required: the Q2 analysis model to load.")
+    if not args.skip_q1 and (args.q1 is None or args.crosswalk is None):
+        raise SystemExit(
+            "Loading Q1 as history needs --q1 and --crosswalk. "
+            "Pass --skip-q1 to load Q2 on its own."
+        )
 
     configure_logging("WARNING", as_json=False)
     init_db()
@@ -261,13 +302,13 @@ def main() -> None:
             crosswalk = read_crosswalk()
             print(f"crosswalk: {len(crosswalk)} Q2 codes have a comparable Q1 basis")
             i, a, r = load_period(
-                db, Q1_MODEL, "2026-Q1",
+                db, _workbook("q1"), "2026-Q1",
                 datetime(2026, 4, 14, tzinfo=timezone.utc), translate=crosswalk,
             )
             print(f"Q1 2026: {i} ingested, {a} approved, {r} rejected")
 
         i, a, r = load_period(
-            db, Q2_MODEL, "2026-Q2",
+            db, _workbook("q2"), "2026-Q2",
             datetime(2026, 7, 14, tzinfo=timezone.utc), translate=None,
         )
         print(f"Q2 2026: {i} ingested, {a} approved, {r} rejected")
