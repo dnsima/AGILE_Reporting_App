@@ -24,7 +24,15 @@ from app.core.logging_config import configure_logging, get_logger  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import engine, init_db, session_scope  # noqa: E402
-from app.models import Cohort, Indicator, IndicatorCategory, State, User  # noqa: E402
+from app.models import (  # noqa: E402
+    Cohort,
+    Indicator,
+    IndicatorCategory,
+    State,
+    StateSubcomponent,
+    Subcomponent,
+    User,
+)
 from app.services import reference  # noqa: E402
 from app.services.validation import sync_rule_catalog  # noqa: E402
 
@@ -90,6 +98,48 @@ def seed_states(db) -> int:
         state.geopolitical_zone = row["geopolitical_zone"]
         cohort = cohorts.get(row["cohort_code"])
         state.cohort_id = cohort.id if cohort else None
+        # States that have not begun reporting stay inactive, so they are not
+        # counted as missing submissions.
+        state.is_active = _as_bool(row.get("is_reporting", "1"))
+    db.flush()
+    return created
+
+
+def seed_subcomponents(db) -> int:
+    existing = {row.code: row for row in db.scalars(select(Subcomponent))}
+    created = 0
+    for row in _rows("subcomponents.csv"):
+        subcomponent = existing.get(row["code"])
+        if subcomponent is None:
+            subcomponent = Subcomponent(code=row["code"])
+            db.add(subcomponent)
+            created += 1
+        subcomponent.name = row["name"]
+        subcomponent.sort_order = int(row["sort_order"])
+    db.flush()
+    return created
+
+
+def seed_applicability(db) -> int:
+    """Which sub-components each state implements, and so must report."""
+    states = {row.code: row for row in db.scalars(select(State))}
+    subcomponents = {row.code: row for row in db.scalars(select(Subcomponent))}
+    existing = {
+        (row.state_id, row.subcomponent_id): row
+        for row in db.scalars(select(StateSubcomponent))
+    }
+    created = 0
+    for row in _rows("state_subcomponents.csv"):
+        state = states.get(row["state_code"])
+        subcomponent = subcomponents.get(row["subcomponent_code"])
+        if state is None or subcomponent is None:
+            continue
+        link = existing.get((state.id, subcomponent.id))
+        if link is None:
+            link = StateSubcomponent(state_id=state.id, subcomponent_id=subcomponent.id)
+            db.add(link)
+            created += 1
+        link.implements = _as_bool(row["implements"])
     db.flush()
     return created
 
@@ -110,8 +160,14 @@ def seed_categories(db) -> int:
     return created
 
 
+#: Percentages are bounded 0-100 and booleans 0-1; the rest are unbounded
+#: counts that simply may not go negative.
+UNIT_BOUNDS = {"PERCENT": (0.0, 100.0), "BOOLEAN": (0.0, 1.0)}
+
+
 def seed_indicators(db) -> int:
     categories = {row.code: row for row in db.scalars(select(IndicatorCategory))}
+    subcomponents = {row.code: row for row in db.scalars(select(Subcomponent))}
     existing = {row.code: row for row in db.scalars(select(Indicator))}
     created = 0
     for row in _rows("indicators.csv"):
@@ -120,23 +176,31 @@ def seed_indicators(db) -> int:
             indicator = Indicator(code=row["code"])
             db.add(indicator)
             created += 1
+
         indicator.number = int(row["number"])
         indicator.name = row["name"]
-        indicator.definition = row["definition"]
-        category = categories.get(row["category_code"])
+        indicator.legacy_code = row.get("legacy_code") or None
+        category = categories.get(row["component"])
         indicator.category_id = category.id if category else None
+        subcomponent = subcomponents.get(row["subcomponent"])
+        indicator.subcomponent_id = subcomponent.id if subcomponent else None
+
         indicator.unit = row["unit"]
         indicator.aggregation_method = row["aggregation_method"]
         indicator.direction = row["direction"]
         indicator.is_cumulative = _as_bool(row["is_cumulative"])
-        indicator.requires_numerator_denominator = _as_bool(row["requires_numerator_denominator"])
-        indicator.baseline_value = _as_float(row["baseline_value"])
-        indicator.min_value = _as_float(row["min_value"])
-        indicator.max_value = _as_float(row["max_value"])
-        indicator.decimal_places = int(row["decimal_places"] or 0)
-        indicator.disaggregations = _as_list(row["disaggregations"])
-        indicator.aliases = _as_list(row["aliases"])
-        indicator.is_core = _as_bool(row["is_core"])
+        indicator.is_reported = _as_bool(row["is_reported"])
+        indicator.composite_of = _as_list(row["composite_of"])
+
+        minimum, maximum = UNIT_BOUNDS.get(row["unit"], (0.0, None))
+        indicator.min_value = minimum
+        indicator.max_value = maximum
+        indicator.decimal_places = 2 if row["unit"] in {"PERCENT", "RATIO"} else 0
+
+        # The old code stays a recognised alias so files still using the
+        # pre-recode template keep ingesting.
+        indicator.aliases = _as_list(row.get("aliases", ""))
+        indicator.is_core = True
         indicator.is_active = True
     db.flush()
     return created
@@ -195,6 +259,8 @@ def main() -> None:
         counts = {
             "cohorts": seed_cohorts(db),
             "states": seed_states(db),
+            "subcomponents": seed_subcomponents(db),
+            "applicability": seed_applicability(db),
             "categories": seed_categories(db),
             "indicators": seed_indicators(db),
             "periods": seed_periods(db, args.years),

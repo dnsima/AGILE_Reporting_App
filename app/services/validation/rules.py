@@ -80,6 +80,25 @@ class RuleContext:
     settings: Any
     #: Rule configuration overrides loaded from the database.
     overrides: dict[str, dict[str, Any]] = dc_field(default_factory=dict)
+    #: Indicators this state is expected to report, from the sub-component
+    #: applicability matrix. Empty means no matrix is configured.
+    applicable_indicator_ids: set[int] = dc_field(default_factory=set)
+    #: National total per indicator from the other states already approved for
+    #: this period, used for the concentration check.
+    national_totals: dict[int, float] = dc_field(default_factory=dict)
+    #: How many states contributed to each of those totals.
+    national_state_counts: dict[int, int] = dc_field(default_factory=dict)
+    #: True when the previous period's figures come from a submission that did
+    #: not pass validation, so comparisons against them are indicative.
+    previous_is_provisional: bool = False
+
+    @property
+    def baseline_note(self) -> str:
+        return (
+            " The previous figure is from a submission that did not pass validation."
+            if self.previous_is_provisional
+            else ""
+        )
 
     def config(self, rule_code: str, key: str, default: Any) -> Any:
         return (self.overrides.get(rule_code) or {}).get(key, default)
@@ -277,6 +296,83 @@ def rows_fully_mapped(ctx: RuleContext) -> Iterator[Finding]:
         )
 
 
+@rule(
+    "INT-005",
+    "Composite indicators equal the sum of their parts",
+    DQADimension.INTEGRITY,
+    severity=Severity.ERROR,
+    blocking=True,
+    description=(
+        "A composite such as C1.0-01 must equal its sub-component parts. "
+        "Non-implementation is reported as zero, so the identity holds for "
+        "every state regardless of what it implements."
+    ),
+    config={"tolerance": 0.5},
+    weight=lambda ctx: max(
+        sum(1 for i in ctx.indicators_by_id.values() if i.composite_of), 1
+    ),
+)
+def composite_equals_parts(ctx: RuleContext) -> Iterator[Finding]:
+    tolerance = float(ctx.config("INT-005", "tolerance", 0.5))
+    totals: dict[str, float] = {}
+    for _value, indicator, effective in _numeric_values(ctx):
+        totals[indicator.code] = totals.get(indicator.code, 0.0) + effective
+
+    for indicator in ctx.indicators_by_id.values():
+        parts = indicator.composite_of or []
+        if not parts or indicator.code not in totals:
+            continue
+        if any(part not in totals for part in parts):
+            continue  # a part is unreported; completeness covers that
+        expected = sum(totals[part] for part in parts)
+        reported = totals[indicator.code]
+        if abs(reported - expected) > tolerance:
+            yield Finding(
+                message=(
+                    f"{indicator.code} reports {reported:g} but its parts "
+                    f"({' + '.join(parts)}) sum to {expected:g}, a gap of "
+                    f"{reported - expected:+g}."
+                ),
+                indicator_id=indicator.id,
+                indicator_code=indicator.code,
+                field="value",
+                observed=f"{reported:g}",
+                expected=f"{expected:g}",
+                context={"parts": parts, "gap": round(reported - expected, 4)},
+            )
+
+
+@rule(
+    "APP-001",
+    "Figures are only reported where the state implements",
+    DQADimension.VALIDITY,
+    severity=Severity.WARNING,
+    description=(
+        "A value against a sub-component the state does not implement is "
+        "usually a mis-keyed row or the wrong state's file."
+    ),
+)
+def within_applicable_scope(ctx: RuleContext) -> Iterator[Finding]:
+    if not ctx.applicable_indicator_ids:
+        return  # no applicability matrix configured
+    for value, indicator, effective in _numeric_values(ctx):
+        if indicator.id in ctx.applicable_indicator_ids or not effective:
+            continue
+        subcomponent = getattr(indicator.subcomponent, "code", "this sub-component")
+        yield Finding(
+            message=(
+                f"{indicator.code}: {effective:g} reported, but {ctx.state.name} "
+                f"does not implement {subcomponent}."
+            ),
+            indicator_id=indicator.id,
+            indicator_code=indicator.code,
+            field="value",
+            observed=f"{effective:g}",
+            expected="blank or zero",
+            source_row=value.source_row,
+        )
+
+
 # ==========================================================================
 # TIMELINESS
 # ==========================================================================
@@ -432,6 +528,50 @@ def denominator_usable(ctx: RuleContext) -> Iterator[Finding]:
             )
 
 
+@rule(
+    "ACC-004",
+    "No single state dominates the national result",
+    DQADimension.ACCURACY,
+    severity=Severity.WARNING,
+    description=(
+        "One state accounting for most of a national total usually signals a "
+        "unit error or a double count rather than genuine concentration."
+    ),
+    config={"max_share_pct": 60.0, "min_states": 5},
+)
+def state_concentration(ctx: RuleContext) -> Iterator[Finding]:
+    ceiling = float(ctx.config("ACC-004", "max_share_pct", 60.0))
+    min_states = int(ctx.config("ACC-004", "min_states", 5))
+
+    for value, indicator, effective in _numeric_values(ctx):
+        if not _is_additive(indicator):
+            continue
+        national = ctx.national_totals.get(indicator.id)
+        contributors = ctx.national_state_counts.get(indicator.id, 0)
+        if not national or contributors < min_states or effective <= 0:
+            continue
+        share = effective / national * 100.0
+        if share > ceiling:
+            yield Finding(
+                message=(
+                    f"{indicator.code}: {ctx.state.name} alone is {share:.0f}% of the "
+                    f"national total across {contributors} reporting states."
+                ),
+                indicator_id=indicator.id,
+                indicator_code=indicator.code,
+                field="value",
+                observed=f"{effective:g}",
+                expected=f"< {ceiling:.0f}% of {national:g}",
+                source_row=value.source_row,
+                context={"share_pct": round(share, 1), "national_total": national},
+            )
+
+
+def _is_additive(indicator: Indicator) -> bool:
+    """Shares only mean something where the national figure is a total."""
+    return str(indicator.aggregation_method) in {"SUM", "WEIGHTED_AVERAGE"}
+
+
 # ==========================================================================
 # COMPLETENESS
 # ==========================================================================
@@ -512,7 +652,7 @@ def period_over_period_change(ctx: RuleContext) -> Iterator[Finding]:
             yield Finding(
                 message=(
                     f"{indicator.code}: changed {change:.0f}% from the previous period "
-                    f"({previous:g} to {effective:g})."
+                    f"({previous:g} to {effective:g}).{ctx.baseline_note}"
                 ),
                 indicator_id=indicator.id,
                 indicator_code=indicator.code,
@@ -542,7 +682,8 @@ def cumulative_monotonic(ctx: RuleContext) -> Iterator[Finding]:
         if effective < previous:
             yield Finding(
                 message=(
-                    f"{indicator.code} is cumulative but fell from {previous:g} to {effective:g}."
+                    f"{indicator.code} is cumulative but fell from {previous:g} to "
+                    f"{effective:g}.{ctx.baseline_note}"
                 ),
                 indicator_id=indicator.id,
                 indicator_code=indicator.code,

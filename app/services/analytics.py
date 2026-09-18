@@ -73,6 +73,23 @@ def _row_status(achievement_pct: float | None, target: float | None, has_data: b
     return "Reported" if has_data else "No data"
 
 
+def _nonzero_mean(values: list[float]) -> float | None:
+    """Mean over the values that are not zero.
+
+    A state reporting 0% for a completion rate is almost always a non-entry
+    rather than a genuine zero, and averaging it in drags the national rate
+    down. This mirrors the NPCU's own rule: "unweighted average of non-zero
+    states".
+    """
+    populated = [value for value in values if value]
+    return round(fmean(populated), 4) if populated else None
+
+
+def _count_yes(values: list[float]) -> float:
+    """How many states answered Yes. Any value at or above 1 counts as Yes."""
+    return float(sum(1 for value in values if value is not None and value >= 1))
+
+
 def status_for(achievement_pct: float | None) -> str:
     if achievement_pct is None:
         return "No target"
@@ -196,6 +213,12 @@ def _collapse(rows: list[IndicatorValue], indicator: Indicator) -> Reading:
 
     if method == AggregationMethod.AVERAGE:
         return Reading(value=fmean(values) if values else None, numerator=numerator, denominator=denominator)
+    if method == AggregationMethod.AVERAGE_NONZERO:
+        return Reading(value=_nonzero_mean(values), numerator=numerator, denominator=denominator)
+    if method == AggregationMethod.COUNT_YES:
+        # Within one state a Yes/No indicator has a single answer; if rows were
+        # split by disaggregation, any Yes makes the state a Yes.
+        return Reading(value=max(values) if values else None, numerator=numerator, denominator=denominator)
     if method == AggregationMethod.MAX:
         return Reading(value=max(values) if values else None, numerator=numerator, denominator=denominator)
     if method == AggregationMethod.MIN:
@@ -324,6 +347,10 @@ def aggregate_national(
         return Reading(round(fmean(values), 4) if values else None, numerator, denominator)
     if method == AggregationMethod.AVERAGE:
         return Reading(round(fmean(values), 4) if values else None, numerator, denominator)
+    if method == AggregationMethod.AVERAGE_NONZERO:
+        return Reading(_nonzero_mean(values), numerator, denominator)
+    if method == AggregationMethod.COUNT_YES:
+        return Reading(_count_yes(values), numerator, denominator)
     if method == AggregationMethod.MAX:
         return Reading(max(values) if values else None, numerator, denominator)
     if method == AggregationMethod.MIN:
@@ -335,9 +362,24 @@ def aggregate_national(
 
 
 def _contribution_basis(reading: Reading, indicator: Indicator) -> float | None:
-    """The quantity a state contributes to the national figure."""
-    if AggregationMethod(indicator.aggregation_method) == AggregationMethod.WEIGHTED_AVERAGE:
+    """The quantity a state contributes to the national figure.
+
+    Contribution is only meaningful where the national figure is a total a
+    state adds to. For an averaged rate or a count of Yes states, a share of
+    the national value would be arithmetic without meaning, so none is offered.
+    """
+    method = AggregationMethod(indicator.aggregation_method)
+    if method == AggregationMethod.WEIGHTED_AVERAGE:
         return reading.numerator if reading.numerator is not None else reading.value
+    if method in {
+        AggregationMethod.AVERAGE,
+        AggregationMethod.AVERAGE_NONZERO,
+        AggregationMethod.COUNT_YES,
+        AggregationMethod.MAX,
+        AggregationMethod.MIN,
+        AggregationMethod.LATEST,
+    }:
+        return None
     return reading.value
 
 

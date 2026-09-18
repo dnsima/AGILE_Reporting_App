@@ -39,6 +39,7 @@ from app.models import (
     Indicator,
     IndicatorValue,
     ReportingPeriod,
+    StateSubcomponent,
     Submission,
     Target,
     ValidationIssue,
@@ -107,14 +108,45 @@ def _load_overrides(db: Session) -> dict[str, ValidationRule]:
 # --------------------------------------------------------------------------
 # Context assembly
 # --------------------------------------------------------------------------
-def _expected_indicator_ids(
+def _applicable_indicator_ids(
     db: Session, submission: Submission, indicators: list[Indicator]
+) -> set[int]:
+    """Indicators in the sub-components this state actually implements.
+
+    Returns an empty set when no applicability matrix is configured, which
+    callers treat as "no restriction".
+    """
+    implemented = set(
+        db.scalars(
+            select(StateSubcomponent.subcomponent_id).where(
+                StateSubcomponent.state_id == submission.state_id,
+                StateSubcomponent.implements.is_(True),
+            )
+        )
+    )
+    if not implemented:
+        return set()
+    return {
+        indicator.id
+        for indicator in indicators
+        if indicator.is_active
+        and indicator.is_reported
+        and indicator.subcomponent_id in implemented
+    }
+
+
+def _expected_indicator_ids(
+    db: Session, submission: Submission, indicators: list[Indicator], applicable: set[int]
 ) -> set[int]:
     """Indicators this state must report this period.
 
-    Targets define the obligation where they exist; otherwise every active core
-    indicator is expected.
+    Preference order: the sub-component applicability matrix, which is the real
+    obligation; then state targets where they exist; then every active core
+    indicator.
     """
+    if applicable:
+        return applicable
+
     targeted = set(
         db.scalars(
             select(Target.indicator_id).where(
@@ -126,6 +158,40 @@ def _expected_indicator_ids(
     if targeted:
         return targeted
     return {indicator.id for indicator in indicators if indicator.is_core and indicator.is_active}
+
+
+def _national_context(
+    db: Session, submission: Submission
+) -> tuple[dict[int, float], dict[int, int]]:
+    """Per-indicator national totals from the other states already approved.
+
+    Used by the concentration check to ask whether one state accounts for an
+    implausible share of the national figure.
+    """
+    peers = list(
+        db.scalars(
+            select(Submission.id).where(
+                Submission.period_id == submission.period_id,
+                Submission.is_current.is_(True),
+                Submission.status == SubmissionStatus.APPROVED,
+                Submission.id != submission.id,
+            )
+        )
+    )
+    totals: dict[int, float] = {}
+    counts: dict[int, int] = {}
+    if not peers:
+        return totals, counts
+
+    for value in db.scalars(
+        select(IndicatorValue).where(IndicatorValue.submission_id.in_(peers))
+    ):
+        effective = value.effective_value
+        if effective is None:
+            continue
+        totals[value.indicator_id] = totals.get(value.indicator_id, 0.0) + effective
+        counts[value.indicator_id] = counts.get(value.indicator_id, 0) + 1
+    return totals, counts
 
 
 def _approved_history(
@@ -174,7 +240,13 @@ def build_context(db: Session, submission: Submission) -> RuleContext:
 
     previous_period = reference.preceding_period(db, period)
     previous_values: dict[int, float] = {}
+    previous_is_provisional = False
     if previous_period is not None:
+        # Prefer the approved figure, but fall back to whatever the state last
+        # submitted. The quality gate governs what reaches *analysis*; a
+        # comparison is a different question, and a state whose previous
+        # quarter was rejected is precisely the one worth comparing. Findings
+        # built on an unapproved baseline say so.
         previous_submission = db.scalar(
             select(Submission).where(
                 Submission.state_id == submission.state_id,
@@ -183,6 +255,19 @@ def build_context(db: Session, submission: Submission) -> RuleContext:
                 Submission.status == SubmissionStatus.APPROVED,
             )
         )
+        if previous_submission is None:
+            candidates = list(
+                db.scalars(
+                    select(Submission).where(
+                        Submission.state_id == submission.state_id,
+                        Submission.period_id == previous_period.id,
+                    )
+                )
+            )
+            if candidates:
+                previous_submission = max(candidates, key=lambda row: row.version)
+                previous_is_provisional = True
+
         if previous_submission is not None:
             for value in db.scalars(
                 select(IndicatorValue).where(
@@ -226,18 +311,25 @@ def build_context(db: Session, submission: Submission) -> RuleContext:
     )
     submission.__dict__["_conflicting_current_ids"] = conflicting
 
+    applicable = _applicable_indicator_ids(db, submission, indicators)
+    national_totals, national_counts = _national_context(db, submission)
+
     return RuleContext(
         submission=submission,
         state=state,
         period=period,
         values=values,
         indicators_by_id=indicators_by_id,
-        expected_indicator_ids=_expected_indicator_ids(db, submission, indicators),
+        expected_indicator_ids=_expected_indicator_ids(db, submission, indicators, applicable),
         previous_values=previous_values,
         history=history,
         targets=targets,
         duplicate_submission_ids=duplicates,
         settings=settings,
+        applicable_indicator_ids=applicable,
+        national_totals=national_totals,
+        national_state_counts=national_counts,
+        previous_is_provisional=previous_is_provisional,
     )
 
 

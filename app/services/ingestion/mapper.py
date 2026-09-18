@@ -121,6 +121,35 @@ def to_number(raw: Any) -> float | None:
     return value
 
 
+_TRUE_TOKENS = {"yes", "y", "true", "t", "1", "1.0", "implemented", "operational", "adopted"}
+_FALSE_TOKENS = {"no", "n", "false", "f", "0", "0.0", "not implemented", "none"}
+
+
+def to_boolean(raw: Any) -> float | None:
+    """Parse a Yes/No answer into 1.0 or 0.0.
+
+    States answer these inconsistently -- "Yes", "YES", "1", "0", "TRUE" -- and
+    the NPCU's own consolidation notes record five states submitting numeric
+    0/1 where the form asked for Yes/No. Anything at or above 1 counts as Yes,
+    matching the rule they applied by hand.
+    """
+    if is_missing(raw):
+        return None
+    if isinstance(raw, bool):
+        return 1.0 if raw else 0.0
+
+    text = str(raw).strip().lower()
+    if text in _TRUE_TOKENS:
+        return 1.0
+    if text in _FALSE_TOKENS:
+        return 0.0
+
+    numeric = to_number(raw)
+    if numeric is not None:
+        return 1.0 if numeric >= 1 else 0.0
+    return None
+
+
 def is_missing(raw: Any) -> bool:
     if raw is None:
         return True
@@ -370,10 +399,11 @@ def map_rows(
                 )
 
             raw_value = _first_present(row, field_columns.get("value", []))
+            parse = to_boolean if indicator.unit == "BOOLEAN" else to_number
             result.values.append(
                 MappedValue(
                     indicator=indicator,
-                    value=to_number(raw_value),
+                    value=parse(raw_value),
                     numerator=to_number(_first_present(row, field_columns.get("numerator", []))),
                     denominator=to_number(
                         _first_present(row, field_columns.get("denominator", []))
@@ -394,10 +424,11 @@ def map_rows(
             raw_value = row.get(header)
             if is_missing(raw_value):
                 continue
+            parse = to_boolean if indicator.unit == "BOOLEAN" else to_number
             result.values.append(
                 MappedValue(
                     indicator=indicator,
-                    value=to_number(raw_value),
+                    value=parse(raw_value),
                     raw_value=_text(raw_value, 255),
                     disaggregation=shared_disaggregation,
                     data_source=data_source,

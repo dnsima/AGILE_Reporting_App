@@ -127,6 +127,9 @@ class IndicatorUnit(StrEnum):
     RATIO = "RATIO"
     CURRENCY_NGN_M = "CURRENCY_NGN_M"
     SCORE = "SCORE"
+    #: Yes/No indicators, e.g. "is the scholarship programme operational?".
+    #: Stored as 1.0 or 0.0 so they aggregate and compare like any other value.
+    BOOLEAN = "BOOLEAN"
 
 
 class AggregationMethod(StrEnum):
@@ -136,6 +139,12 @@ class AggregationMethod(StrEnum):
     MAX = "MAX"
     MIN = "MIN"
     LATEST = "LATEST"
+    #: Unweighted mean over states that reported a non-zero value. A state
+    #: reporting 0% for a completion rate is almost always a non-entry rather
+    #: than a true zero, and including it drags the national rate down.
+    AVERAGE_NONZERO = "AVERAGE_NONZERO"
+    #: National figure for a Yes/No indicator: how many states answered Yes.
+    COUNT_YES = "COUNT_YES"
 
 
 class Direction(StrEnum):
@@ -143,6 +152,29 @@ class Direction(StrEnum):
 
     INCREASE = "INCREASE"
     DECREASE = "DECREASE"
+
+
+class IndicatorDisposition(StrEnum):
+    """What became of an indicator when the results framework was revised."""
+
+    RETAINED = "RETAINED"
+    MERGED = "MERGED"
+    TRANSFORMED = "TRANSFORMED"
+    MOVED = "MOVED"
+    SPLIT = "SPLIT"
+    DROPPED = "DROPPED"
+    NEW = "NEW"
+
+
+#: Dispositions whose figures may be compared period-on-period. MERGED is
+#: comparable only once the predecessor's parts are summed, which the analysis
+#: engine does; the rest have no like-for-like basis and comparisons against
+#: them are suppressed rather than reported as movement.
+COMPARABLE_DISPOSITIONS = {
+    IndicatorDisposition.RETAINED,
+    IndicatorDisposition.MOVED,
+    IndicatorDisposition.MERGED,
+}
 
 
 class TargetLevel(StrEnum):
