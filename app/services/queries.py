@@ -347,6 +347,47 @@ def reject(
     return query
 
 
+def withdraw(
+    db: Session, query: DataQuery, *, reason: str, actor: User | None = None
+) -> DataQuery:
+    """Close a query raised in error, releasing whatever it held.
+
+    A rule can be wrong, or retuned after the fact. Withdrawing says so on the
+    record rather than leaving the state to answer for a finding nobody stands
+    behind -- and it releases the figure, which is the part that matters: a
+    quarantined figure sits out of every national total until something settles
+    it, and "we should not have asked" settles it.
+    """
+    if not query.is_open:
+        raise ConflictError(f"Query #{query.id} is already {query.status}.")
+
+    _release_quarantine(db, query)
+    query.status = str(QueryStatus.WITHDRAWN)
+    query.resolution = str(QueryResolution.WITHDRAWN)
+    query.resolution_note = reason
+    query.closed_by_id = getattr(actor, "id", None)
+    query.closed_at = datetime.now(timezone.utc)
+    db.flush()
+
+    submission = db.get(Submission, query.submission_id) if query.submission_id else None
+    if submission is not None:
+        _refresh_counts(db, submission)
+
+    audit.record(
+        db,
+        action="query.withdraw",
+        entity_type="data_query",
+        entity_id=query.id,
+        actor=actor,
+        state_id=query.state_id,
+        period_id=query.period_id,
+        summary=f"Query #{query.id} withdrawn: {reason}",
+        after={"status": query.status},
+    )
+    event_bus.publish("query.withdrawn", {"query_id": query.id})
+    return query
+
+
 def escalate_to_verification(
     db: Session, query: DataQuery, *, reason: str, actor: User | None = None
 ) -> DataQuery:
@@ -523,9 +564,19 @@ def verification_worklist(db: Session, state_id: int | None = None) -> list[Data
     return open_queries(db, state_id=state_id, verification_only=True)
 
 
-def query_summary(db: Session, period_id: int) -> dict:
-    """Counts for the dashboard and for the report's open-query section."""
-    rows = list(db.scalars(select(DataQuery).where(DataQuery.period_id == period_id)))
+def query_summary(
+    db: Session, period_id: int, *, state_ids: list[int] | None = None
+) -> dict:
+    """Counts for the dashboard and for the report's open-query section.
+
+    ``state_ids`` narrows the count to what the caller may see. A state PIU
+    shown the national figure would read 106 open queries against its own 21
+    and have no way to tell which were its to answer.
+    """
+    stmt = select(DataQuery).where(DataQuery.period_id == period_id)
+    if state_ids is not None:
+        stmt = stmt.where(DataQuery.state_id.in_(state_ids or [0]))
+    rows = list(db.scalars(stmt))
     open_rows = [row for row in rows if row.is_open]
     return {
         "total": len(rows),

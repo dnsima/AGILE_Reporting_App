@@ -23,6 +23,7 @@
     <button class="tab" data-view="kpis" role="tab">KPI performance</button>
     <button class="tab" data-view="cohorts" role="tab">Cohorts</button>
     <button class="tab" data-view="quality" role="tab">Data quality</button>
+    <button class="tab" data-view="queries" role="tab">Queries<span class="tab-count" id="tab-query-count" hidden></span></button>
     <button class="tab" data-view="states" role="tab">States</button>
     <button class="tab" data-view="upload" role="tab">Upload</button>
     <button class="tab" data-view="reports" role="tab">Reports</button>
@@ -151,6 +152,45 @@
           <span class="hint">What the tracker implies, and what the quarterly return says</span>
         </header>
         <div class="table-scroll" id="reconciliation-lines"></div>
+      </article>
+    </section>
+
+    <!-- Queries -------------------------------------------------------------->
+    <section class="view" id="view-queries">
+      <div class="tile-grid" id="query-tiles"></div>
+
+      <article class="panel">
+        <header>
+          <h2>Flagged figures</h2>
+          <span class="hint" id="query-caption">Every figure queried for the selected period</span>
+        </header>
+        <div class="row query-filters">
+          <label>Show
+            <select id="query-filter-status">
+              <option value="open">Still open</option>
+              <option value="overdue">Overdue</option>
+              <option value="awaiting">Awaiting NPCU review</option>
+              <option value="verification">Referred for verification</option>
+              <option value="all">Everything, including settled</option>
+            </select>
+          </label>
+          <label>State
+            <select id="query-filter-state"><option value="">All states</option></select>
+          </label>
+          <button class="btn ghost" type="button" id="correction-sheet-btn">Download correction sheet</button>
+          <label class="file-inline">Upload completed sheet
+            <input type="file" id="correction-sheet-file" accept=".xlsx,.xlsm">
+          </label>
+        </div>
+        <div class="table-scroll" id="query-table"></div>
+      </article>
+
+      <article class="panel" id="query-detail-panel">
+        <header>
+          <h2 id="query-detail-title">Resolve a query</h2>
+          <span class="hint">Select a flagged figure above</span>
+        </header>
+        <div id="query-detail" class="muted">Nothing selected.</div>
       </article>
     </section>
 

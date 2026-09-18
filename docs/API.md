@@ -102,6 +102,72 @@ Targets carry a second meaning: where a state has targets for a period, those
 indicators are what that state is *obliged* to report, and the completeness
 dimension is measured against them.
 
+## Data queries
+
+A validation finding is not a wall the submission hits. It becomes a query
+owned by the state that reported the figure, answered with evidence, and
+settled by the NPCU. Nothing here rejects a return, and no figure changes
+without an accepted response behind it.
+
+| Method | Path | Permission |
+|---|---|---|
+| `GET` | `/queries` | `data:read` — worklist, state-scoped |
+| `GET` | `/queries/summary` | `data:read` — counts for the caller's scope |
+| `GET` | `/queries/{id}` | `data:read` — the query and every response on it |
+| `POST` | `/queries/{id}/responses` | `data:upload` — **own state only** |
+| `POST` | `/queries/{id}/responses/{rid}/evidence` | `data:upload` — attach a document |
+| `POST` | `/queries/{id}/accept` | `data:approve` |
+| `POST` | `/queries/{id}/reject` | `data:approve` — back to the state |
+| `POST` | `/queries/{id}/verification` | `data:approve` — refer for a site check |
+| `POST` | `/queries/{id}/withdraw` | `data:approve` — raised in error |
+| `GET` | `/queries/sheets/{state}` | `data:read` — correction sheet |
+| `POST` | `/queries/sheets/{state}` | `data:upload` — completed sheet |
+
+### The control
+
+A `STATE_PIU` has `data:upload` and not `data:approve`, so it can respond and
+nothing else; the endpoints also check that the query belongs to the caller's
+own state, so one state can neither read, answer for, nor pull a correction
+sheet belonging to another. Nobody clears their own response into the national
+figures.
+
+Only `accept` moves a stored figure, and only when the response proposed one.
+`IndicatorValue.original_value` keeps what was first reported, so "as first
+reported" and "as currently stated" are both always available and a published
+report can be reconciled against the live dashboard.
+
+### Statuses
+
+`OPEN` → `RESPONDED` → `ACCEPTED`, with `REJECTED` returning it to the state
+(still open, still the state's work) and `VERIFICATION` parking it for a
+physical check on the next supervision or DQA visit. `WITHDRAWN` closes a query
+raised in error and releases the figure.
+
+### The held figure
+
+A finding the rules cannot work around quarantines its figure: excluded from
+every aggregation, but still on record and visible, rather than taking the
+whole return down with it. Two rules can flag one figure, so settling a query
+releases it **only if no other open query still holds it** — `held_by` on the
+query detail names the ones that do.
+
+### Restating an earlier period
+
+`restates_period_code` names the period a correction applies to, which is not
+always the period queried. A cumulative figure that appears to fall is usually
+put right by restating the *earlier* period, once evidence shows the original
+was overstated.
+
+### Correction sheets
+
+`GET /queries/sheets/{state}` issues a sheet containing only that state's
+flagged figures — never the whole return. Each row carries the query reference,
+what was reported and what was flagged, with open columns for the corrected
+figure, the evidence and the explanation. Restricting it to flagged rows is the
+control: a figure nobody queried cannot be changed by this route. Uploading the
+completed sheet turns every filled row into a response on the query it names,
+and those responses still wait for the NPCU.
+
 ## Reconciliation
 
 States report the same 53 indicators twice: monthly through the performance

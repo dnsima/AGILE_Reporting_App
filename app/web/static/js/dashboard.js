@@ -25,6 +25,9 @@
     indicators: [],
     dataVersion: 0,
     loading: false,
+    queryFilter: "open",
+    queryState: "",
+    selectedQuery: null,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -173,6 +176,13 @@
       .join("");
     $("upload-period").value = defaultPeriod;
 
+    $("query-filter-state").innerHTML = '<option value="">All states</option>' + stateOptions;
+    if (state.stateCode) {
+      $("query-filter-state").value = state.stateCode;
+      state.queryState = state.stateCode;
+      if (state.user.role === "STATE_PIU") $("query-filter-state").disabled = true;
+    }
+
     $("report-period").innerHTML = $("upload-period").innerHTML;
     $("report-period").value = defaultPeriod;
     $("report-category").innerHTML = $("filter-category").innerHTML;
@@ -266,6 +276,30 @@
         period: periodCode,
       });
     });
+    $("query-filter-status").addEventListener("change", function () {
+      state.queryFilter = this.value;
+      render();
+    });
+    $("query-filter-state").addEventListener("change", function () {
+      state.queryState = this.value;
+      state.selectedQuery = null;
+      render();
+    });
+    $("correction-sheet-btn").addEventListener("click", function () {
+      const stateCode = correctionSheetState();
+      if (!stateCode) {
+        return toast("Choose a state — a sheet carries only that state's flagged figures.", "error");
+      }
+      window.location.href = api.downloadUrl("/queries/sheets/" + stateCode, {
+        period: state.period,
+      });
+    });
+    $("correction-sheet-file").addEventListener("change", function () {
+      if (this.files[0]) {
+        uploadCorrectionSheet(this.files[0]);
+        this.value = "";
+      }
+    });
     $("report-form").addEventListener("submit", submitReport);
     $("report-scope").addEventListener("change", syncReportScopeRef);
   }
@@ -342,6 +376,7 @@
       else if (state.view === "kpis") await renderKpis();
       else if (state.view === "cohorts") await renderCohorts();
       else if (state.view === "quality") await renderQuality();
+      else if (state.view === "queries") await renderQueries();
       else if (state.view === "states") await renderStates();
       else if (state.view === "upload") await renderUpload();
       else if (state.view === "reports") await renderReports();
@@ -791,6 +826,375 @@
       ],
       lines
     );
+  }
+
+  // -- query resolution ------------------------------------------------------
+  // The screen a state settles its flagged figures on. A query nobody answers
+  // holds its figure out of every national total, so overdue reads loudest and
+  // the figure's own state -- quarantined or counting -- is always on show.
+
+  function canReview() {
+    return (state.user.permissions || []).indexOf("data:approve") !== -1;
+  }
+
+  function canRespond() {
+    return (state.user.permissions || []).indexOf("data:upload") !== -1;
+  }
+
+  /** True when this user owns the figure, i.e. may answer for it. */
+  function ownsQuery(query) {
+    if (!canRespond()) return false;
+    if (state.user.role !== "STATE_PIU") return true;
+    return query.state_id === state.user.state_id;
+  }
+
+  function queryParams() {
+    const params = { period: state.period, limit: 500 };
+    if (state.queryState) params.state = state.queryState;
+    if (state.queryFilter === "overdue") params.overdue_only = true;
+    else if (state.queryFilter === "awaiting") params.awaiting_review = true;
+    else if (state.queryFilter === "verification") params.verification_only = true;
+    else if (state.queryFilter === "all") params.open_only = false;
+    return params;
+  }
+
+  async function renderQueries() {
+    const [summary, rows] = await Promise.all([
+      api.get("/queries/summary", { period: state.period, state: state.queryState || undefined }),
+      api.get("/queries", queryParams()),
+    ]);
+
+    const scope = state.queryState
+      ? (state.states.find((s) => s.code === state.queryState) || {}).name || state.queryState
+      : "all states";
+    $("query-caption").textContent =
+      summary.open + " open of " + summary.total + " raised for " + summary.period_label +
+      " · " + scope;
+    updateQueryTabCount(summary.open);
+
+    const tiles = [
+      { label: "Open", value: summary.open, caption: "still somebody's work", status: summary.open ? "lagging" : "on-track" },
+      { label: "Overdue", value: summary.overdue, caption: "past the response date", status: summary.overdue ? "off-track" : "on-track" },
+      { label: "Awaiting review", value: summary.awaiting_review, caption: "state has responded", status: "" },
+      { label: "For verification", value: summary.for_verification, caption: "to check on a visit", status: "" },
+      { label: "Figures restated", value: summary.restated, caption: "corrected with evidence", status: "on-track" },
+    ];
+    $("query-tiles").innerHTML = tiles
+      .map(function (tile) {
+        return '<div class="tile ' + tile.status + '">' +
+          '<div class="label">' + tile.label + "</div>" +
+          '<div class="value">' + tile.value + "</div>" +
+          '<div class="caption">' + tile.caption + "</div></div>";
+      })
+      .join("");
+
+    $("query-table").innerHTML = table(
+      [
+        { label: "Ref", render: (r) => esc(r.reference) },
+        { label: "State", render: (r) => esc(r.state_name) },
+        { label: "Indicator", render: (r) => esc(r.indicator_code || "—") },
+        { label: "Period", render: (r) => esc(r.period_code) },
+        { label: "Rule", render: (r) => esc(r.rule_code || "—") },
+        { label: "Reported", num: true, render: (r) => num(r.reported_value) },
+        {
+          label: "Due",
+          render: (r) =>
+            '<span class="' + (r.is_overdue ? "due" : "") + '">' +
+            (r.due_date || "—") +
+            (r.is_overdue ? " (" + r.days_overdue + "d late)" : "") + "</span>",
+        },
+        { label: "Status", render: (r) => badge(r.status.toLowerCase()) },
+        {
+          label: "Figure",
+          render: (r) => (r.is_quarantined ? badge("quarantined") : badge("counting")),
+        },
+      ],
+      rows
+    );
+
+    // The table helper has no row hooks, so wire selection on the rendered rows.
+    const body = $("query-table").querySelectorAll("tbody tr");
+    body.forEach(function (tr, index) {
+      const row = rows[index];
+      tr.classList.add("query-row");
+      if (row.is_overdue) tr.classList.add("overdue");
+      tr.children[6].classList.add("due");
+      if (state.selectedQuery === row.id) tr.classList.add("selected");
+      tr.addEventListener("click", function () {
+        state.selectedQuery = row.id;
+        body.forEach((other) => other.classList.remove("selected"));
+        tr.classList.add("selected");
+        renderQueryDetail(row.id);
+      });
+    });
+
+    if (state.selectedQuery && rows.some((r) => r.id === state.selectedQuery)) {
+      await renderQueryDetail(state.selectedQuery);
+    } else if (!rows.length) {
+      state.selectedQuery = null;
+      $("query-detail-title").textContent = "Resolve a query";
+      setPanel("query-detail", '<p class="muted">Nothing flagged for this selection.</p>');
+    }
+  }
+
+  function updateQueryTabCount(open) {
+    const chip = $("tab-query-count");
+    chip.hidden = false;
+    chip.textContent = open;
+    chip.className = "tab-count" + (open ? "" : " none");
+  }
+
+  async function renderQueryDetail(queryId) {
+    let query;
+    try {
+      query = await api.get("/queries/" + queryId);
+    } catch (error) {
+      return fail(error, "Query");
+    }
+    state.selectedQuery = queryId;
+    $("query-detail-title").textContent =
+      query.reference + " · " + (query.indicator_code || "submission") + " · " + query.state_name;
+
+    const finding =
+      '<div class="finding' + (query.is_quarantined ? " blocking" : "") + '">' +
+      '<div class="rule">' + esc(query.rule_code || "finding") + " · " +
+      esc(query.dimension || "") + " · " + esc(query.severity || "") + "</div>" +
+      "<p>" + esc(query.title) + "</p>" +
+      (query.detail ? '<p class="detail">' + esc(query.detail) + "</p>" : "") +
+      "</div>";
+
+    const figures =
+      '<div class="kv">' +
+      "<div><dt>As reported</dt><dd>" + num(query.reported_value) + "</dd></div>" +
+      "<div><dt>As it stands</dt><dd>" + num(query.current_value) + "</dd></div>" +
+      "<div><dt>Indicator</dt><dd style='font-size:.85rem'>" +
+      esc(query.indicator_name || "—") + "</dd></div>" +
+      "<div><dt>Response due</dt><dd style='font-size:.95rem'>" +
+      (query.due_date || "—") +
+      (query.is_overdue ? " · " + query.days_overdue + " days late" : "") + "</dd></div>" +
+      "<div><dt>In the national total</dt><dd style='font-size:.95rem'>" +
+      figureStanding(query) + "</dd></div>" +
+      "</div>";
+
+    const thread = query.responses.length
+      ? '<ul class="thread">' +
+        query.responses
+          .map(function (response) {
+            const outcome = (response.review_outcome || "").toLowerCase();
+            return '<li class="' + outcome + '">' +
+              '<div class="who">' +
+              "<strong>" + esc(response.responder || "State") + "</strong>" +
+              "<span>" + esc((response.submitted_at || "").slice(0, 16).replace("T", " ")) + "</span>" +
+              (response.review_outcome ? badge(outcome) : badge("awaiting review")) +
+              "</div>" +
+              '<p class="narrative">' + esc(response.narrative) + "</p>" +
+              (response.proposed_value === null || response.proposed_value === undefined
+                ? '<p class="proposal">Figure confirmed as reported.</p>'
+                : '<p class="proposal">Proposes ' + num(response.proposed_value) +
+                  (response.restates_period_code
+                    ? " against " + esc(response.restates_period_code)
+                    : "") + ".</p>") +
+              (response.evidence_summary
+                ? '<p class="evidence">Evidence: ' + esc(response.evidence_summary) + "</p>"
+                : "") +
+              (response.evidence.length
+                ? '<p class="evidence">Attached: ' +
+                  response.evidence.map((e) => esc(e.filename)).join(", ") + "</p>"
+                : "") +
+              (response.review_note
+                ? '<p class="evidence">NPCU: ' + esc(response.review_note) + "</p>"
+                : "") +
+              "</li>";
+          })
+          .join("") +
+        "</ul>"
+      : '<p class="muted">No response yet.</p>';
+
+    setPanel("query-detail", finding + figures + thread + queryActions(query));
+    wireQueryActions(query);
+  }
+
+  /** Whether the figure counts, and if not, what is still holding it. */
+  function figureStanding(query) {
+    if (!query.is_quarantined) return "counting";
+    if (query.held_by && query.held_by.length) {
+      // Two rules can flag one figure; settling this one does not settle those.
+      return "held out — also queried by " + esc(query.held_by.join(", "));
+    }
+    return "held out until settled";
+  }
+
+  function queryActions(query) {
+    if (!query.is_open) {
+      return '<div class="query-closed">' +
+        esc(query.reference) + " is " + esc(query.status.toLowerCase()) +
+        (query.resolution ? " — figure " + esc(query.resolution.toLowerCase()) : "") +
+        (query.resolution_note ? ". " + esc(query.resolution_note) : ".") +
+        "</div>";
+    }
+
+    let html = '<div class="query-actions">';
+
+    if (ownsQuery(query)) {
+      html +=
+        '<fieldset><legend>Respond</legend><form class="stack" id="respond-form">' +
+        "<label>Your response" +
+        '<select id="respond-kind">' +
+        '<option value="confirm">The figure stands as reported</option>' +
+        '<option value="correct">Propose a correction</option>' +
+        "</select></label>" +
+        '<label id="respond-value-label" hidden>Corrected figure' +
+        '<input type="text" id="respond-value" inputmode="decimal" placeholder="e.g. 342"></label>' +
+        '<label id="respond-period-label" hidden>Which period this corrects' +
+        '<select id="respond-period"></select></label>' +
+        "<label>Explanation" +
+        '<textarea id="respond-narrative" rows="3" required ' +
+        'placeholder="What the figure is, and what evidence supports it"></textarea></label>' +
+        "<label>Evidence provided" +
+        '<input type="text" id="respond-evidence" ' +
+        'placeholder="e.g. Verified contractor certificates, June site visit"></label>' +
+        "<label>Attach a document (optional)" +
+        '<input type="file" id="respond-file"></label>' +
+        '<div class="row"><button class="btn primary" type="submit" id="respond-btn">' +
+        "Submit response</button></div></form></fieldset>";
+    }
+
+    if (canReview()) {
+      const responded = query.status === "RESPONDED";
+      html +=
+        '<fieldset><legend>NPCU decision</legend><form class="stack" id="review-form">' +
+        "<label>Note" +
+        '<textarea id="review-note" rows="3" ' +
+        'placeholder="Why this is accepted, returned, or referred"></textarea></label>' +
+        '<div class="row">' +
+        '<button class="btn primary" type="button" id="accept-btn"' +
+        (responded ? "" : " disabled title=\"There is no response to accept yet\"") +
+        ">Accept</button>" +
+        '<button class="btn ghost" type="button" id="reject-btn"' +
+        (responded ? "" : " disabled title=\"There is no response to return yet\"") +
+        ">Return to state</button>" +
+        '<button class="btn ghost" type="button" id="verify-btn">Refer for verification</button>' +
+        '<button class="btn ghost" type="button" id="withdraw-btn">Withdraw</button>' +
+        "</div></form></fieldset>";
+    }
+
+    if (!ownsQuery(query) && !canReview()) {
+      html += '<p class="muted">You have read access to this query but cannot act on it.</p>';
+    }
+    return html + "</div>";
+  }
+
+  function wireQueryActions(query) {
+    const respondForm = $("respond-form");
+    if (respondForm) {
+      const periodSelect = $("respond-period");
+      periodSelect.innerHTML = state.periods
+        .map((p) => '<option value="' + p.code + '">' + p.label + "</option>")
+        .join("");
+      periodSelect.value = query.period_code;
+
+      $("respond-kind").addEventListener("change", function () {
+        const correcting = this.value === "correct";
+        $("respond-value-label").hidden = !correcting;
+        $("respond-period-label").hidden = !correcting;
+      });
+      respondForm.addEventListener("submit", (event) => submitResponse(event, query));
+    }
+
+    if ($("review-form")) {
+      $("accept-btn").addEventListener("click", () => reviewQuery(query, "accept"));
+      $("reject-btn").addEventListener("click", () => reviewQuery(query, "reject"));
+      $("verify-btn").addEventListener("click", () => reviewQuery(query, "verification"));
+      $("withdraw-btn").addEventListener("click", () => reviewQuery(query, "withdraw"));
+    }
+  }
+
+  async function submitResponse(event, query) {
+    event.preventDefault();
+    const narrative = $("respond-narrative").value.trim();
+    if (!narrative) return toast("Explain the figure and cite its evidence.", "error");
+
+    const correcting = $("respond-kind").value === "correct";
+    const raw = $("respond-value").value.trim();
+    if (correcting && !raw) return toast("Enter the corrected figure.", "error");
+    const proposed = correcting ? Number(raw.replace(/,/g, "")) : null;
+    if (correcting && !isFinite(proposed)) return toast("The corrected figure is not a number.", "error");
+
+    const button = $("respond-btn");
+    button.disabled = true;
+    button.textContent = "Submitting…";
+    try {
+      const detail = await api.post("/queries/" + query.id + "/responses", {
+        narrative: narrative,
+        proposed_value: proposed,
+        evidence_summary: $("respond-evidence").value.trim() || null,
+        restates_period_code: correcting ? $("respond-period").value : null,
+      });
+
+      const file = $("respond-file").files[0];
+      if (file) {
+        const responseId = detail.responses[detail.responses.length - 1].id;
+        const form = new FormData();
+        form.append("file", file);
+        await api.upload(
+          "/queries/" + query.id + "/responses/" + responseId + "/evidence", form
+        );
+      }
+      toast("Response submitted. It now sits with the NPCU.", "success");
+      await render();
+    } catch (error) {
+      fail(error, "Response");
+    } finally {
+      button.disabled = false;
+      button.textContent = "Submit response";
+    }
+  }
+
+  async function reviewQuery(query, action) {
+    const note = $("review-note").value.trim();
+    if (action !== "accept" && !note) {
+      return toast("Give a reason — the state sees it.", "error");
+    }
+    const payload = action === "accept" ? { note: note || null } : { reason: note };
+    try {
+      await api.post("/queries/" + query.id + "/" + action, payload);
+      toast(
+        {
+          accept: "Accepted. The figure is settled and back in the national total.",
+          reject: "Returned to the state.",
+          verification: "Referred for physical verification.",
+          withdraw: "Withdrawn. The figure is released.",
+        }[action],
+        "success"
+      );
+      await render();
+    } catch (error) {
+      fail(error, "Review");
+    }
+  }
+
+  function correctionSheetState() {
+    if (state.user.role === "STATE_PIU") return state.user.state_code || state.stateCode;
+    return state.queryState || state.stateCode;
+  }
+
+  async function uploadCorrectionSheet(file) {
+    const stateCode = correctionSheetState();
+    if (!stateCode) return toast("Choose a state before uploading its sheet.", "error");
+    const form = new FormData();
+    form.append("file", file);
+    form.append("period_code", state.period);
+    try {
+      const result = await api.upload("/queries/sheets/" + stateCode, form);
+      toast(result.message, result.applied ? "success" : "error");
+      if (result.warnings.length) {
+        console.warn("correction sheet", result.warnings);
+        toast(result.warnings[0], "error");
+      }
+      await render();
+    } catch (error) {
+      fail(error, "Correction sheet");
+    }
   }
 
   // -- states ---------------------------------------------------------------

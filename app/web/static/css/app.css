@@ -140,20 +140,23 @@ tbody tr:hover { background: var(--surface-2); }
 
 .badge { display: inline-block; padding: 1px 8px; border-radius: 11px; font-size: .72rem; font-weight: 700; }
 .badge.on-track, .badge.excellent, .badge.good, .badge.approved,
-.badge.matched { background: var(--ok-bg); color: var(--ok); }
-.badge.progressing, .badge.fair, .badge.validated { background: var(--info-bg); color: var(--info); }
+.badge.matched, .badge.accepted, .badge.counting { background: var(--ok-bg); color: var(--ok); }
+.badge.progressing, .badge.fair, .badge.validated,
+.badge.responded, .badge.awaiting-review, .badge.verification { background: var(--info-bg); color: var(--info); }
 .badge.lagging, .badge.weak, .badge.uploaded,
-.badge.framework-missing, .badge.tracker-missing { background: var(--warn-bg); color: var(--warn); }
+.badge.framework-missing, .badge.tracker-missing, .badge.open { background: var(--warn-bg); color: var(--warn); }
 .badge.off-track, .badge.poor, .badge.rejected, .badge.error,
-.badge.mismatch { background: var(--bad-bg); color: var(--bad); }
+.badge.mismatch, .badge.quarantined { background: var(--bad-bg); color: var(--bad); }
 .badge.no-data, .badge.no-target, .badge.not-submitted,
-.badge.incomplete { background: var(--surface-2); color: var(--text-muted); }
+.badge.incomplete, .badge.withdrawn { background: var(--surface-2); color: var(--text-muted); }
 
 /* --------------------------------------------------------------- forms --- */
 .stack { display: flex; flex-direction: column; gap: 10px; }
 .stack label { display: flex; flex-direction: column; gap: 4px; font-size: .78rem; font-weight: 600;
   color: var(--text-muted); }
 .stack label.inline { flex-direction: row; align-items: center; gap: 7px; font-weight: 500; }
+/* An author `display` beats the UA stylesheet's [hidden] rule, so say it here. */
+.stack label[hidden], .row [hidden] { display: none; }
 .stack input[type=file], .stack select, .stack textarea, .stack input[type=text] {
   padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px;
   background: var(--surface-2); color: var(--text); font-size: .85rem; font-family: inherit; }
@@ -286,3 +289,54 @@ tbody tr:hover { background: var(--surface-2); }
   margin-top: 8px; }
 .viz-scale .ramp { display: flex; }
 .viz-scale .ramp i { width: 22px; height: 10px; display: block; }
+
+/* --- Query resolution ------------------------------------------------------
+   The screen a state settles its flagged figures on. Overdue has to read at a
+   glance: a query nobody answers holds a figure out of the national total. */
+.tab-count { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 9px;
+  background: var(--warn-bg); color: var(--warn); font-size: .7rem; font-weight: 700;
+  vertical-align: 1px; }
+.tab-count.none { background: var(--surface-2); color: var(--text-muted); }
+
+.query-filters { align-items: flex-end; margin-bottom: 12px; }
+.query-filters label { display: flex; flex-direction: column; gap: 4px; font-size: .78rem;
+  font-weight: 600; color: var(--text-muted); }
+.query-filters select, .query-filters input[type=file] { background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; color: var(--text);
+  font: inherit; font-size: .84rem; font-weight: 400; }
+.query-filters .btn { align-self: flex-end; }
+.file-inline input[type=file] { max-width: 250px; }
+
+tr.query-row { cursor: pointer; }
+tr.query-row:hover > td { background: var(--surface-2); }
+tr.query-row.selected > td { background: var(--info-bg); }
+tr.query-row.overdue td.due { color: var(--bad); font-weight: 700; }
+
+/* The finding, verbatim: the state reads the same words the NPCU did. */
+.finding { background: var(--surface-2); border-left: 3px solid var(--warn);
+  border-radius: 8px; padding: 11px 14px; margin: 0 0 14px; }
+.finding .rule { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-muted); font-weight: 700; }
+.finding p { margin: 5px 0 0; font-size: .88rem; }
+.finding .detail { color: var(--text-muted); font-size: .8rem; }
+.finding.blocking { border-left-color: var(--bad); }
+
+.thread { list-style: none; margin: 0 0 16px; padding: 0; display: flex;
+  flex-direction: column; gap: 10px; }
+.thread li { border: 1px solid var(--border); border-radius: 8px; padding: 10px 13px;
+  font-size: .84rem; }
+.thread .who { font-size: .74rem; color: var(--text-muted); display: flex; gap: 8px;
+  flex-wrap: wrap; align-items: center; }
+.thread .narrative { margin: 6px 0 0; white-space: pre-wrap; }
+.thread .proposal { margin: 7px 0 0; font-weight: 600; }
+.thread .evidence { margin: 7px 0 0; font-size: .78rem; color: var(--text-muted); }
+.thread li.accepted { border-left: 3px solid var(--ok); }
+.thread li.rejected { border-left: 3px solid var(--bad); }
+
+.query-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px; }
+.query-actions fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 13px 15px;
+  margin: 0; }
+.query-actions legend { font-size: .78rem; font-weight: 700; color: var(--brand); padding: 0 6px; }
+.query-closed { background: var(--ok-bg); color: var(--ok); border-radius: 8px;
+  padding: 10px 13px; font-size: .84rem; font-weight: 600; }
