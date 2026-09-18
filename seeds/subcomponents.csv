@@ -1,0 +1,11 @@
+code,name,sort_order
+PDO,Project Development Objective,1
+C1,"Component 1 - general (composites, WASH, safeguarding, whole-school)",2
+C1.1,Sub-component 1.1 - new school construction,3
+C1.2,Sub-component 1.2 - existing schools and school improvement grants,4
+C2.1,Sub-component 2.1 - community mobilisation and media outreach,5
+C2.2a,Sub-component 2.2a - life skills and safe spaces,6
+C2.2b,Sub-component 2.2b - digital literacy,7
+C2.2c,Sub-component 2.2c - second-chance non-formal education,8
+C2.3,Sub-component 2.3 - scholarships and social safety net,9
+C3,"Component 3 - cross-cutting, management and system strengthening",10
