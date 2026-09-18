@@ -1038,8 +1038,17 @@ def tracker_agrees_with_framework(ctx: RuleContext) -> Iterator[Finding]:
             field="value",
             observed=f"{fmt(line.coarse_value)}",
             expected=f"{fmt(line.fine_value)}",
+            # A line that reconciles exactly under another basis is most likely
+            # ours to fix, not the state's to answer for. Kept visible, kept out
+            # of the query workflow: a state reporting its tracker on a basis
+            # the catalogue reads differently would otherwise collect a query
+            # for every indicator at once, for one configuration error.
+            severity=Severity.INFO if line.reconciles_as is not None else None,
             context={
                 "basis": str(line.basis),
+                "reconciles_as": (
+                    None if line.reconciles_as is None else str(line.reconciles_as)
+                ),
                 "variance": line.variance,
                 "variance_pct": line.variance_pct,
                 "months": line.part_values,

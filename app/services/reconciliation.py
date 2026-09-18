@@ -188,6 +188,10 @@ def enclosed_periods(
 # --------------------------------------------------------------------------
 # Results
 # --------------------------------------------------------------------------
+#: Bases a mismatch is re-tested against, to catch one configured the wrong way.
+ALTERNATIVE_BASES = [TimeBasis.SNAPSHOT, TimeBasis.SUM, TimeBasis.LATEST]
+
+
 @dataclass
 class ReconciliationLine:
     """One indicator, judged across the two streams."""
@@ -206,6 +210,10 @@ class ReconciliationLine:
     parts_reported: list[str] = field(default_factory=list)
     part_values: dict[str, float] = field(default_factory=dict)
     is_quarantined: bool = False
+    #: A basis under which this line would have reconciled exactly. Set only on
+    #: a mismatch, and it means the indicator's own basis may be wrong rather
+    #: than the figure.
+    reconciles_as: TimeBasis | None = None
 
     @property
     def variance(self) -> float | None:
@@ -318,6 +326,7 @@ def _describe(
     fine_value: float | None,
     coarse_value: float | None,
     status: ReconciliationStatus,
+    alternative: TimeBasis | None = None,
 ) -> str:
     """Say in words what was expected and why, for whoever resolves the query."""
     code = indicator.code
@@ -374,7 +383,47 @@ def _describe(
 
     if status is ReconciliationStatus.MATCHED:
         return f"{expectation}. The quarterly return agrees."
-    return f"{expectation}. The quarterly return says {fmt(coarse_value)}."
+
+    note = f"{expectation}. The quarterly return says {fmt(coarse_value)}."
+    if alternative is not None:
+        reading = {
+            TimeBasis.SUM: "its months added together",
+            TimeBasis.SNAPSHOT: "the last month reported",
+            TimeBasis.LATEST: "the most recent answer",
+            TimeBasis.MAX: "the highest month",
+            TimeBasis.MIN: "the lowest month",
+        }[alternative]
+        note += (
+            f" It reconciles exactly if {code} is read as {reading} instead, so the "
+            f"figure may be right and its time basis wrong."
+        )
+    return note
+
+
+def _basis_that_would_agree(
+    basis: TimeBasis,
+    series: list[float],
+    coarse_value: float | None,
+    tolerance: float,
+) -> TimeBasis | None:
+    """A different basis that reconciles this line exactly, if one does.
+
+    A figure can disagree because it is wrong, or because the platform is
+    reading it the wrong way -- adding months that are already running totals,
+    or taking the last month of something counted afresh each month. The two
+    look identical in a mismatch report, and only one of them is the state's
+    problem. Where the arithmetic works out exactly under another basis, that
+    is worth saying: it points at the catalogue rather than at the return.
+    """
+    if coarse_value is None or len(series) < 2:
+        return None
+    for candidate in ALTERNATIVE_BASES:
+        if candidate is basis:
+            continue
+        folded = fold(candidate, series)
+        if folded is not None and abs(coarse_value - folded) <= tolerance:
+            return candidate
+    return None
 
 
 def reconcile_state(
@@ -472,6 +521,17 @@ def reconcile_state(
         else:
             status = ReconciliationStatus.MISMATCH
 
+        alternative = (
+            _basis_that_would_agree(
+                basis,
+                [part_values[code] for code in contributing],
+                coarse_value,
+                tolerance_for(indicator, rate_tolerance),
+            )
+            if status is ReconciliationStatus.MISMATCH
+            else None
+        )
+
         lines.append(
             ReconciliationLine(
                 indicator_id=indicator.id,
@@ -486,12 +546,20 @@ def reconcile_state(
                 fine_value=fine_value,
                 status=status,
                 note=_describe(
-                    basis, indicator, contributing, part_values, fine_value, coarse_value, status
+                    basis,
+                    indicator,
+                    contributing,
+                    part_values,
+                    fine_value,
+                    coarse_value,
+                    status,
+                    alternative,
                 ),
                 parts_expected=parts_expected,
                 parts_reported=contributing,
                 part_values=part_values,
                 is_quarantined=bool(coarse_row and not coarse_row.is_valid),
+                reconciles_as=alternative,
             )
         )
 

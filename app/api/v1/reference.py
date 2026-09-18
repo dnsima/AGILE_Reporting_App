@@ -37,7 +37,7 @@ from app.schemas.reference import (
     TargetBulkUpsert,
     TargetRead,
 )
-from app.services import audit, reference
+from app.services import audit, reconciliation, reference
 from app.services import periods as period_service
 
 router = APIRouter(prefix="/reference", tags=["Reference data"])
@@ -71,6 +71,8 @@ def _indicator_read(indicator: Indicator) -> IndicatorRead:
         aggregation_method=indicator.aggregation_method,
         direction=indicator.direction,
         is_cumulative=indicator.is_cumulative,
+        time_basis=indicator.time_basis,
+        effective_time_basis=str(reconciliation.time_basis(indicator)),
         requires_numerator_denominator=indicator.requires_numerator_denominator,
         baseline_value=indicator.baseline_value,
         min_value=indicator.min_value,
@@ -254,6 +256,10 @@ def update_indicator(
     before = _indicator_read(indicator).model_dump(mode="json")
 
     for attribute, value in payload.model_dump(exclude_unset=True).items():
+        if attribute == "time_basis" and value in ("", None):
+            # An empty string clears the override so the basis is derived again.
+            indicator.time_basis = None
+            continue
         setattr(indicator, attribute, str(value) if hasattr(value, "value") else value)
     db.flush()
 

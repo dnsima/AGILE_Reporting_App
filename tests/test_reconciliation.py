@@ -555,3 +555,159 @@ def test_agreement_is_measured_over_states_that_actually_track(db, months):
     assert summary["states_tracking"] == 1
     assert summary["judged"] == 1
     assert summary["agreement"] == 100.0
+
+
+# --------------------------------------------------------------------------
+# A basis configured the wrong way announces itself
+# --------------------------------------------------------------------------
+class TestBasisDetection:
+    """A figure can disagree because it is wrong, or because it is read wrongly.
+
+    The two look identical in a mismatch report, and only one is the state's
+    problem, so where the arithmetic works out exactly under another basis the
+    line says so.
+    """
+
+    def test_a_running_total_read_as_a_flow_is_named(self, db, months):
+        """Months that are already running totals, added: the quarter is 3x too big."""
+        counter = _indicators(db)["KPI-004"]
+        counter.is_cumulative = False
+        counter.time_basis = str(TimeBasis.SUM)   # configured as a flow
+        db.flush()
+        # The state reports a running total: 100, 100, 100 — the quarter is 100.
+        for code in MONTHS:
+            _submit(db, code, {"KPI-004": 100.0})
+        _submit(db, QUARTER, {"KPI-004": 100.0})
+
+        line = _line(_reconcile(db), "KPI-004")
+        assert line.status is ReconciliationStatus.MISMATCH
+        assert line.fine_value == 300.0        # summed, as configured
+        assert line.reconciles_as is TimeBasis.SNAPSHOT
+        assert "reconciles exactly if KPI-004 is read as the last month reported" in line.note
+        assert "its time basis wrong" in line.note
+
+    def test_a_flow_read_as_a_running_total_is_named(self, db, months):
+        for code, value in zip(MONTHS, [12.0, 9.0, 14.0], strict=True):
+            _submit(db, code, {"KPI-001": value})
+        _submit(db, QUARTER, {"KPI-001": 35.0})
+
+        line = _line(_reconcile(db), "KPI-001")
+        assert line.status is ReconciliationStatus.MISMATCH
+        assert line.reconciles_as is TimeBasis.SUM
+        assert "read as its months added together" in line.note
+
+    def test_a_genuine_discrepancy_names_no_alternative(self, db, months):
+        for code, value in zip(MONTHS, [100.0, 250.0, 400.0], strict=True):
+            _submit(db, code, {"KPI-001": value})
+        _submit(db, QUARTER, {"KPI-001": 994.0})
+
+        line = _line(_reconcile(db), "KPI-001")
+        assert line.status is ReconciliationStatus.MISMATCH
+        assert line.reconciles_as is None
+        assert "time basis" not in line.note
+
+    def test_a_single_month_never_suggests_an_alternative(self, db, months):
+        """One month folds identically under every basis, so it proves nothing."""
+        _submit(db, MONTHS[2], {"KPI-001": 400.0})
+        _submit(db, QUARTER, {"KPI-001": 994.0})
+
+        line = _line(_reconcile(db), "KPI-001")
+        assert line.status is ReconciliationStatus.MISMATCH
+        assert line.reconciles_as is None
+
+    def test_a_match_is_never_second_guessed(self, db, months):
+        for code in MONTHS:
+            _submit(db, code, {"KPI-001": 400.0})
+        _submit(db, QUARTER, {"KPI-001": 400.0})
+        assert _line(_reconcile(db), "KPI-001").reconciles_as is None
+
+    def test_the_endpoint_carries_it(self, db, client, npcu_headers, months):
+        for code, value in zip(MONTHS, [12.0, 9.0, 14.0], strict=True):
+            _submit(db, code, {"KPI-001": value})
+        _submit(db, QUARTER, {"KPI-001": 35.0})
+
+        body = _get_json(client, npcu_headers, f"/api/v1/reconciliation/KN?period={QUARTER}")
+        line = next(row for row in body["lines"] if row["indicator_code"] == "KPI-001")
+        assert line["reconciles_as"] == str(TimeBasis.SUM)
+
+
+def _get_json(client, headers, path):
+    response = client.get(path, headers=headers)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+class TestTimeBasisIsEditable:
+    """The basis has to be changeable without a redeploy or a reseed."""
+
+    def test_the_api_shows_what_will_actually_be_applied(self, client, npcu_headers):
+        body = _get_json(client, npcu_headers, "/api/v1/reference/indicators/KPI-001")
+        assert body["time_basis"] is None          # nothing set
+        assert body["effective_time_basis"] == str(TimeBasis.SNAPSHOT)   # derived
+
+    def test_setting_it_changes_the_reconciliation(self, client, npcu_headers, db, months):
+        response = client.patch(
+            "/api/v1/reference/indicators/KPI-001",
+            headers=npcu_headers,
+            json={"time_basis": str(TimeBasis.SUM)},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["effective_time_basis"] == str(TimeBasis.SUM)
+
+        db.expire_all()
+        for code, value in zip(MONTHS, [12.0, 9.0, 14.0], strict=True):
+            _submit(db, code, {"KPI-001": value})
+        _submit(db, QUARTER, {"KPI-001": 35.0})
+        line = _line(_reconcile(db), "KPI-001")
+        assert line.basis is TimeBasis.SUM
+        assert line.status is ReconciliationStatus.MATCHED
+
+    def test_clearing_it_derives_the_basis_again(self, client, npcu_headers):
+        client.patch(
+            "/api/v1/reference/indicators/KPI-001",
+            headers=npcu_headers,
+            json={"time_basis": str(TimeBasis.SUM)},
+        )
+        cleared = client.patch(
+            "/api/v1/reference/indicators/KPI-001",
+            headers=npcu_headers,
+            json={"time_basis": ""},
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["time_basis"] is None
+        assert cleared.json()["effective_time_basis"] == str(TimeBasis.SNAPSHOT)
+
+    def test_a_state_cannot_change_it(self, client, state_headers):
+        response = client.patch(
+            "/api/v1/reference/indicators/KPI-001",
+            headers=state_headers,
+            json={"time_basis": str(TimeBasis.SUM)},
+        )
+        assert response.status_code == 403
+
+
+class TestBasisErrorsDoNotBecomeTheStatesWork:
+    def test_a_likely_basis_error_is_informational_not_a_query(self, db, months):
+        """One configuration error must not arrive as 53 queries."""
+        for code, value in zip(MONTHS, [12.0, 9.0, 14.0], strict=True):
+            _submit(db, code, {"KPI-001": value, "KPI-002": 20.0})
+        submission = _submit(db, QUARTER, {"KPI-001": 35.0, "KPI-002": 60.0})
+
+        summary = run_validation(db, submission)
+        findings = [i for i in summary.issues if i.rule_code == "REC-001"]
+        assert len(findings) == 2
+        assert {i.severity for i in findings} == {str(Severity.INFO)}
+
+        opened = queries.raise_queries(db, submission)
+        assert [q for q in opened if q.rule_code == "REC-001"] == []
+
+    def test_a_real_discrepancy_still_raises_one(self, db, months):
+        for code, value in zip(MONTHS, [100.0, 250.0, 400.0], strict=True):
+            _submit(db, code, {"KPI-001": value})
+        submission = _submit(db, QUARTER, {"KPI-001": 994.0})
+
+        summary = run_validation(db, submission)
+        finding = next(i for i in summary.issues if i.rule_code == "REC-001")
+        assert finding.severity == str(Severity.WARNING)
+        opened = queries.raise_queries(db, submission)
+        assert [q.rule_code for q in opened if q.rule_code == "REC-001"] == ["REC-001"]

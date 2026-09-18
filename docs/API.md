@@ -254,13 +254,48 @@ across months, because each month's tracker figure is already a position.
 
 The basis is derived from the catalogue, and the derivation defaults to
 `SNAPSHOT`. `is_cumulative` being false means "not a running total since
-inception", not "a within-period flow" — fourteen of the 53 are marked that
-way, and reading them as sums would tell every state its quarterly enrolment
-should equal April + May + June. A wrong `SNAPSHOT` misses a discrepancy; a
-wrong `SUM` manufactures hundreds. So `SUM` is opt-in through the indicator's
-`time_basis` column (blank in `seeds/indicators.csv` — nothing in the current
-framework is a flow), and the reporting template prints the same answer in its
-*Monthly rolls up as* column so the two halves cannot drift apart.
+inception", not "a within-period flow". A wrong `SNAPSHOT` misses a
+discrepancy; a wrong `SUM` manufactures hundreds. So `SUM` is opt-in through
+the indicator's `time_basis` column, and the reporting template prints the same
+answer in its *Monthly rolls up as* column so the two halves cannot drift
+apart.
+
+`time_basis` is blank for all 53, which was checked rather than assumed. The
+fourteen marked "Current (No.)" were reviewed against the Q1 and Q2 returns
+from eighteen states. PDO-01..06 and PDO-10..12 are stocks by name and by data.
+PDO-13..16 — girls attempting and passing Junior and Senior WAEC — looked like
+the real candidates, since an exam sitting is an event rather than a stock; but
+thirteen of seventeen states report the *identical* figure in Q1 and Q2, which
+is an annual sitting carried forward, not a count accumulated month by month.
+Reading them as flows would have tripled every one.
+
+`GET /reference/indicators/{code}` returns both `time_basis` (what is set) and
+`effective_time_basis` (what will be applied). `PATCH` sets it without a
+reseed; an empty string clears it back to the derivation.
+
+### When a basis is wrong, the mismatch says so
+
+A figure can disagree because it is wrong, or because the platform is reading
+it the wrong way — adding months that are already running totals, or taking the
+last month of something counted afresh each month. The two are identical in a
+mismatch report and only one of them is the state's problem. So where the
+arithmetic reconciles exactly under a different basis, the line carries
+`reconciles_as` and says it:
+
+> C1.0-02 is a running total, so the quarter should equal 2026-M06's figure of
+> 212. The quarterly return says 636. It reconciles exactly if C1.0-02 is read
+> as its months added together instead, so the figure may be right and its time
+> basis wrong.
+
+It needs at least two months to say anything, because one month folds
+identically under every basis.
+
+Such a line is recorded as **INFO** rather than a warning, so it does not raise
+a query. A state whose tracker is read on the wrong basis would otherwise
+collect a query for every indicator at once — fifty-three pieces of work for
+one configuration error, none of it the state's to answer. The finding stays
+visible in validation and in the report; it is simply not the state's problem
+until someone has ruled out the basis.
 
 ### Verdicts
 

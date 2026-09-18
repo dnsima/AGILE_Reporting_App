@@ -81,10 +81,30 @@ COMPOSITES: dict[str, list[str]] = {
 }
 
 #: Indicators whose months genuinely add up into the quarter, by new code.
-#: Empty on purpose. The framework's own `Type` column offers only "Current"
-#: and "Cumulative" -- a count as at now, or a running total since inception --
-#: and both are positions, read at the period's end. Neither adds across
-#: months. A within-period flow would go here, and nothing in the 53 is one.
+#:
+#: Empty, and checked rather than assumed. The framework's `Type` column offers
+#: only "Current (No.)" and "Cumulative (No.)" -- a count as at now, or a
+#: running total since inception -- and both are positions read at the period's
+#: end. The fourteen marked "Current" were reviewed one by one against the Q1
+#: and Q2 returns from eighteen states:
+#:
+#: * PDO-01..06 (students enrolled, girls currently enrolled, boys and girls
+#:   benefiting) and PDO-10..12 (schools in the state) are stocks by name, and
+#:   the data agrees: the figure is unchanged between quarters for 12 to 16 of
+#:   the 17 states reporting both.
+#: * C2.2b-01 (schools running the digital literacy programme) is a count of
+#:   schools currently running it -- a stock.
+#: * PDO-13..16 (girls attempting and passing Junior and Senior WAEC) looked
+#:   like the real candidates: an exam sitting is an event, not a stock. The
+#:   returns say otherwise. Thirteen of seventeen states report the *identical*
+#:   figure in Q1 and Q2, which is an annual sitting carried forward and
+#:   restated when it changes, not a count accumulated month by month. Reading
+#:   them as flows would have multiplied every one of them by three.
+#:
+#: If an indicator is added that genuinely is counted afresh each month, it
+#: goes here -- or is set through PATCH /reference/indicators/{code}, which
+#: needs no reseed. Either way the reconciliation names a basis that looks
+#: wrong, so a mistake here surfaces rather than sitting silent.
 TIME_BASIS: dict[str, str] = {}
 
 #: The results framework's `Type` column drives every downstream calculation.

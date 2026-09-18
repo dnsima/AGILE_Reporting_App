@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -13,6 +14,7 @@ from app.core.enums import (
     IndicatorUnit,
     PeriodType,
     TargetLevel,
+    TimeBasis,
 )
 from app.schemas.common import ORMModel
 
@@ -70,6 +72,11 @@ class IndicatorRead(ORMModel):
     aggregation_method: str
     direction: str
     is_cumulative: bool
+    #: Explicit time basis, or NULL to derive it. See ``effective_time_basis``
+    #: for what is actually applied.
+    time_basis: str | None = None
+    #: The basis reconciliation will use, derived when none is set.
+    effective_time_basis: str | None = None
     requires_numerator_denominator: bool
     baseline_value: float | None = None
     min_value: float | None = None
@@ -88,6 +95,10 @@ class IndicatorUpdate(BaseModel):
     aggregation_method: AggregationMethod | None = None
     direction: Direction | None = None
     is_cumulative: bool | None = None
+    #: Set to SUM only for a genuine within-period flow -- something counted
+    #: afresh each month, where the months legitimately add up into the
+    #: quarter. Send an empty string to clear it and derive the basis again.
+    time_basis: TimeBasis | Literal[""] | None = None
     requires_numerator_denominator: bool | None = None
     baseline_value: float | None = None
     min_value: float | None = None

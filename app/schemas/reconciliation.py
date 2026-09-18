@@ -28,6 +28,9 @@ class ReconciliationLineRead(BaseModel):
     parts_reported: list[str] = Field(default_factory=list)
     part_values: dict[str, float] = Field(default_factory=dict)
     is_quarantined: bool = False
+    #: Set on a mismatch that would reconcile exactly under another basis: the
+    #: figure may be right and the indicator's time basis wrong.
+    reconciles_as: str | None = None
 
 
 class StateReconciliationRead(BaseModel):

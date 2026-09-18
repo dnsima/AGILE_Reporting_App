@@ -60,6 +60,7 @@ def _line_read(line: reconciliation.ReconciliationLine) -> ReconciliationLineRea
         parts_reported=line.parts_reported,
         part_values=line.part_values,
         is_quarantined=line.is_quarantined,
+        reconciles_as=None if line.reconciles_as is None else str(line.reconciles_as),
     )
 
 
