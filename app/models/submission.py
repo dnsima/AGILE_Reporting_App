@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -66,6 +67,11 @@ class Submission(Base, TimestampMixin):
     approved_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    #: How many figures in this submission are under query, and how many are
+    #: quarantined out of the aggregations.
+    open_query_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    quarantined_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
     dqa_score: Mapped[float | None] = mapped_column(Float, index=True)
     dqa_grade: Mapped[str | None] = mapped_column(String(24))
     error_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -114,6 +120,11 @@ class IndicatorValue(Base, TimestampMixin):
     indicator_id: Mapped[int] = mapped_column(ForeignKey("indicators.id"), nullable=False)
 
     value: Mapped[float | None] = mapped_column(Float)
+    #: The figure as first reported. Set once at ingestion and never changed,
+    #: so a published report and the live dashboard can always be reconciled
+    #: after a restatement.
+    original_value: Mapped[float | None] = mapped_column(Float)
+    is_restated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     numerator: Mapped[float | None] = mapped_column(Float)
     denominator: Mapped[float | None] = mapped_column(Float)
     #: Verbatim cell content, retained so parsing decisions stay auditable.
@@ -123,7 +134,10 @@ class IndicatorValue(Base, TimestampMixin):
     data_source: Mapped[str | None] = mapped_column(String(255))
     comment: Mapped[str | None] = mapped_column(Text)
     source_row: Mapped[int | None] = mapped_column(Integer)
+    #: False quarantines the figure: it stays on record and is visible, but is
+    #: excluded from every aggregation until the query against it is settled.
     is_valid: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    quarantine_reason: Mapped[str | None] = mapped_column(String(255))
 
     submission: Mapped[Submission] = relationship(back_populates="values")
     indicator: Mapped["Indicator"] = relationship()
@@ -154,6 +168,10 @@ class Target(Base, TimestampMixin):
     #: NULL for national targets.
     state_id: Mapped[int | None] = mapped_column(ForeignKey("states.id"))
     target_value: Mapped[float] = mapped_column(Float, nullable=False)
+    #: Targets only count once the project's governance body has cleared them.
+    status: Mapped[str] = mapped_column(String(16), default="APPROVED", nullable=False)
+    approved_by_body: Mapped[str | None] = mapped_column(String(255))
+    approved_on: Mapped[date | None] = mapped_column(Date)
     source: Mapped[str | None] = mapped_column(String(255))
     notes: Mapped[str | None] = mapped_column(Text)
 

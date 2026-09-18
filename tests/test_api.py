@@ -35,7 +35,12 @@ def _template(rows, state="Kano", period="2026-Q1") -> bytes:
     return buffer.getvalue()
 
 
-def _upload(client, headers, rows=None, **form):
+def _upload(client, headers, rows=None, content=None, **form):
+    """Upload a template. Pass ``content`` to send exactly the same bytes twice.
+
+    openpyxl stamps a creation time into the workbook, so rebuilding the same
+    rows produces different bytes and a different hash.
+    """
     payload = {
         "state_code": "KN",
         "period_code": "2026-Q1",
@@ -46,7 +51,13 @@ def _upload(client, headers, rows=None, **form):
     return client.post(
         "/api/v1/ingestion/upload",
         headers=headers,
-        files={"file": ("upload.xlsx", _template(rows or CLEAN_ROWS), "application/vnd.ms-excel")},
+        files={
+            "file": (
+                "upload.xlsx",
+                content if content is not None else _template(rows or CLEAN_ROWS),
+                "application/vnd.ms-excel",
+            )
+        },
         data=payload,
     )
 
@@ -267,16 +278,20 @@ class TestIngestion:
         assert response.status_code == 201
         assert response.json()["submission"]["state_code"] == "KN"
 
-    def test_invalid_data_is_kept_out_of_the_pipeline(self, client, npcu_headers):
+    def test_an_unusable_figure_is_quarantined_not_rejected(self, client, npcu_headers):
+        """The bad figure leaves the analysis; the rest of the return still counts."""
         bad = [row[:] for row in CLEAN_ROWS]
         bad[1][4] = 137.0  # a transition rate above 100%
 
         body = _upload(client, npcu_headers, rows=bad).json()
-        assert body["accepted"] is False
-        assert body["submission"]["status"] == "REJECTED"
-        assert body["submission"]["is_current"] is False
+        assert body["accepted"] is True
+        assert body["submission"]["status"] == "APPROVED"
+        assert body["submission"]["is_current"] is True
+        assert body["submission"]["quarantined_count"] >= 1
+        assert body["submission"]["open_query_count"] >= 1
         assert any(issue["rule_code"] == "VAL-002" for issue in body["validation"]["issues"])
 
+        # The out-of-range figure is excluded from the national roll-up...
         analysis = client.get(
             "/api/v1/analytics/indicators/KPI-002",
             headers=npcu_headers,
@@ -284,9 +299,21 @@ class TestIngestion:
         ).json()
         assert analysis["national"]["value"] is None
 
-    def test_duplicate_file_is_refused(self, client, npcu_headers):
-        assert _upload(client, npcu_headers, allow_duplicate="false").status_code == 201
-        response = _upload(client, npcu_headers, allow_duplicate="false")
+        # ...while the sound figures in the same file still report.
+        analysis = client.get(
+            "/api/v1/analytics/indicators/KPI-001",
+            headers=npcu_headers,
+            params={"period": "2026-Q1"},
+        ).json()
+        assert analysis["national"]["value"] == 900
+
+    def test_the_same_file_uploaded_twice_is_refused(self, client, npcu_headers):
+        content = _template(CLEAN_ROWS)
+        assert _upload(
+            client, npcu_headers, content=content, allow_duplicate="false"
+        ).status_code == 201
+
+        response = _upload(client, npcu_headers, content=content, allow_duplicate="false")
         assert response.status_code == 409
         assert response.json()["error"]["code"] == "conflict"
 
@@ -349,10 +376,14 @@ class TestIngestion:
         assert approved.status_code == 200
         assert approved.json()["status"] == "APPROVED"
 
-    def test_rejected_submission_cannot_be_approved(self, client, npcu_headers):
-        bad = [row[:] for row in CLEAN_ROWS]
-        bad[1][4] = 137.0
-        submission = _upload(client, npcu_headers, rows=bad).json()["submission"]
+    def test_a_manually_rejected_submission_cannot_be_approved(self, client, npcu_headers):
+        """Validation no longer rejects, but a reviewer still can."""
+        submission = _upload(client, npcu_headers, auto_approve="false").json()["submission"]
+        client.post(
+            f"/api/v1/ingestion/submissions/{submission['id']}/reject",
+            headers=npcu_headers,
+            json={"reason": "Wrong reporting period."},
+        )
 
         response = client.post(
             f"/api/v1/ingestion/submissions/{submission['id']}/approve",
@@ -360,6 +391,7 @@ class TestIngestion:
             json={},
         )
         assert response.status_code == 409
+        assert "Upload a new version" in response.json()["error"]["message"]
 
 
 # --------------------------------------------------------------------------

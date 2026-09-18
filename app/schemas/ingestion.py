@@ -71,6 +71,8 @@ class SubmissionRead(ORMModel):
     dqa_grade: str | None = None
     error_count: int
     warning_count: int
+    open_query_count: int = 0
+    quarantined_count: int = 0
     uploaded_at: datetime | None = None
     approved_at: datetime | None = None
     notes: str | None = None

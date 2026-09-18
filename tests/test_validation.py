@@ -209,14 +209,16 @@ class TestAccuracy:
 
 
 class TestGating:
-    def test_blocking_error_rejects_the_submission(self, db):
+    def test_a_blocking_finding_does_not_reject_the_return(self, db):
+        """A flagged figure is queried with the state, not a reason to refuse the file."""
         submission = _submission(db)
         _value(db, submission, "KPI-001", value=100.0)
         _value(db, submission, "KPI-001", value=100.0)  # duplicate
-        run_validation(db, submission)
+        summary = run_validation(db, submission)
 
-        assert submission.status == SubmissionStatus.REJECTED
-        assert "blocking validation error" in submission.rejection_reason
+        assert summary.blocking
+        assert submission.status == SubmissionStatus.VALIDATED
+        assert submission.rejection_reason is None
 
     def test_clean_submission_is_validated(self, db):
         submission = _submission(db)

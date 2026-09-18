@@ -1,6 +1,7 @@
 """SQLAlchemy models. Importing this package registers every mapper."""
 
 from app.models.audit import AuditLog
+from app.models.query import DataQuery, EvidenceFile, QueryResponse, ValueRevision
 from app.models.reference import (
     Cohort,
     Indicator,
@@ -20,12 +21,15 @@ __all__ = [
     "ApiKey",
     "AuditLog",
     "Cohort",
+    "DataQuery",
     "DQAScore",
+    "EvidenceFile",
     "GeneratedReport",
     "Indicator",
     "IndicatorCategory",
     "IndicatorLink",
     "IndicatorValue",
+    "QueryResponse",
     "ReportingPeriod",
     "State",
     "StateSubcomponent",
@@ -34,5 +38,6 @@ __all__ = [
     "Target",
     "User",
     "ValidationIssue",
+    "ValueRevision",
     "ValidationRule",
 ]

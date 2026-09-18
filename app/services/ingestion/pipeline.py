@@ -28,7 +28,7 @@ from app.schemas.ingestion import (
     ManualSubmission,
 )
 from app.schemas.validation import ValidationSummary
-from app.services import audit, reference
+from app.services import audit, queries, reference
 from app.services.ingestion.mapper import MappedValue, map_rows
 from app.services.ingestion.parser import parse_upload
 from app.services.validation import run_validation
@@ -85,6 +85,9 @@ def _persist_values(
                 submission_id=submission.id,
                 indicator_id=mapped.indicator.id,
                 value=mapped.value,
+                # Kept for the lifetime of the figure, so a restatement never
+                # erases what the state originally reported.
+                original_value=mapped.value,
                 numerator=mapped.numerator,
                 denominator=mapped.denominator,
                 raw_value=mapped.raw_value,
@@ -102,13 +105,16 @@ def _finalise(
     submission: Submission,
     actor: User | None,
     auto_approve: bool,
+    *,
+    raise_queries: bool = True,
 ) -> ValidationSummary:
-    """Validate, then either admit the submission or keep it out of the pipeline."""
+    """Validate, open queries against the findings, then admit the submission."""
     summary = run_validation(db, submission)
 
-    if submission.status == SubmissionStatus.REJECTED:
-        submission.is_current = False
-    elif auto_approve:
+    if raise_queries:
+        queries.raise_queries(db, submission, actor=actor)
+
+    if auto_approve:
         submission.status = str(SubmissionStatus.APPROVED)
         submission.approved_by_id = getattr(actor, "id", None)
         submission.approved_at = datetime.now(timezone.utc)
@@ -400,14 +406,8 @@ def approve_submission(
 ) -> Submission:
     if submission.status == SubmissionStatus.REJECTED:
         raise ConflictError(
-            "This submission failed validation and cannot be approved. "
-            "Correct the data and upload a new version.",
+            "This submission was rejected. Upload a new version to replace it.",
             details={"rejection_reason": submission.rejection_reason},
-        )
-    if (submission.dqa_score or 0) < settings.dqa_minimum_score:
-        raise ConflictError(
-            f"DQA score {submission.dqa_score} is below the "
-            f"{settings.dqa_minimum_score:.0f} minimum required for approval."
         )
 
     before = {"status": submission.status, "is_current": submission.is_current}

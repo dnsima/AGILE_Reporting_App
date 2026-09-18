@@ -567,21 +567,18 @@ def _persist(
     submission.error_count = summary.error_count
     submission.warning_count = summary.warning_count
 
-    blocked_by_score = summary.overall_score < settings.dqa_minimum_score
-    if summary.blocking or blocked_by_score:
-        submission.status = str(SubmissionStatus.REJECTED)
-        reasons = []
-        if summary.blocking:
-            reasons.append(f"{summary.error_count} blocking validation error(s)")
-        if blocked_by_score:
-            reasons.append(
-                f"DQA score {summary.overall_score:.1f} is below the "
-                f"{settings.dqa_minimum_score:.0f} minimum"
-            )
-        submission.rejection_reason = "; ".join(reasons)
-    else:
+    # A finding no longer takes the whole return down. Figures the rules cannot
+    # use are quarantined individually and queried with the state that reported
+    # them; everything else still counts. A cumulative figure that falls may be
+    # a genuine downward restatement once evidence is produced, and blocking it
+    # would penalise exactly the correction the process exists to capture.
+    #
+    # Re-validation must not quietly withdraw an approval: rules are re-run
+    # whenever a threshold changes or a figure is restated, and an approved
+    # return stays approved unless someone decides otherwise.
+    if submission.status != SubmissionStatus.APPROVED:
         submission.status = str(SubmissionStatus.VALIDATED)
-        submission.rejection_reason = None
+    submission.rejection_reason = None
 
     db.flush()
 

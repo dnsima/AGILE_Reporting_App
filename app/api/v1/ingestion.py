@@ -65,6 +65,8 @@ def _submission_read(submission: Submission) -> SubmissionRead:
         dqa_grade=submission.dqa_grade,
         error_count=submission.error_count,
         warning_count=submission.warning_count,
+        open_query_count=submission.open_query_count,
+        quarantined_count=submission.quarantined_count,
         uploaded_at=submission.uploaded_at,
         approved_at=submission.approved_at,
         notes=submission.notes,

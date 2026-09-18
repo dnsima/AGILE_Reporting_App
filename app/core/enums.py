@@ -182,6 +182,43 @@ class TargetLevel(StrEnum):
     NATIONAL = "NATIONAL"
 
 
+class QueryStatus(StrEnum):
+    """Lifecycle of a data query raised against a reported figure."""
+
+    OPEN = "OPEN"                    # raised, awaiting the state's response
+    RESPONDED = "RESPONDED"          # state has responded, awaiting NPCU review
+    ACCEPTED = "ACCEPTED"            # NPCU accepted: figure confirmed or restated
+    REJECTED = "REJECTED"            # NPCU rejected the response; back to the state
+    VERIFICATION = "VERIFICATION"    # escalated to physical verification
+    WITHDRAWN = "WITHDRAWN"          # raised in error
+
+
+#: A query in one of these states is still work for someone.
+OPEN_QUERY_STATUSES = {
+    QueryStatus.OPEN,
+    QueryStatus.RESPONDED,
+    QueryStatus.REJECTED,
+    QueryStatus.VERIFICATION,
+}
+
+
+class QueryResolution(StrEnum):
+    """How a query was settled."""
+
+    CONFIRMED = "CONFIRMED"          # the figure stands as reported, with evidence
+    RESTATED = "RESTATED"            # the figure was corrected
+    VERIFIED = "VERIFIED"            # settled by physical verification
+    WITHDRAWN = "WITHDRAWN"
+
+
+class TargetStatus(StrEnum):
+    """Targets only count once the governance body has cleared them."""
+
+    DRAFT = "DRAFT"
+    APPROVED = "APPROVED"
+    SUPERSEDED = "SUPERSEDED"
+
+
 class ReportScope(StrEnum):
     STATE = "STATE"
     NATIONAL = "NATIONAL"
