@@ -89,7 +89,7 @@ class TestRaising:
         assert query.indicator_id == indicator.id
         assert query.status == QueryStatus.OPEN
         assert query.reported_value == 342.0
-        assert "fell from 1577 to 342" in query.title
+        assert "fell from 1,577 to 342" in query.title
         assert query.due_date > date.today()
 
     def test_validation_no_longer_rejects_the_submission(self, db):

@@ -118,7 +118,7 @@ class TestWorklist:
 
         assert row["reference"] == f"Q-{flagged['query_id']}"
         assert row["rule_code"] == "CON-002"
-        assert "fell from 1577 to 342" in row["title"]
+        assert "fell from 1,577 to 342" in row["title"]
         assert row["reported_value"] == 342.0
         assert row["is_open"] is True
         assert row["due_date"] is not None

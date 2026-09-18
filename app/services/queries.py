@@ -27,6 +27,7 @@ from app.core.enums import (
 )
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.core.events import event_bus
+from app.core.formatting import fmt
 from app.core.logging_config import get_logger
 from app.models import (
     DataQuery,
@@ -222,7 +223,7 @@ def respond(
         summary=(
             f"Response submitted for query #{query.id}"
             + (
-                f", proposing {proposed_value:g} in place of {query.reported_value:g}."
+                f", proposing {fmt(proposed_value)} in place of {fmt(query.reported_value)}."
                 if proposed_value is not None and query.reported_value is not None
                 else ", confirming the figure as reported."
             )
@@ -562,6 +563,50 @@ def open_queries(
 def verification_worklist(db: Session, state_id: int | None = None) -> list[DataQuery]:
     """Figures still unconfirmed, for checking on the next supervision visit."""
     return open_queries(db, state_id=state_id, verification_only=True)
+
+
+def held_figures(
+    db: Session, period_id: int, *, state_ids: list[int] | None = None
+) -> list[IndicatorValue]:
+    """Figures quarantined out of the aggregations for this period.
+
+    These are the reason a national total in a published report can differ from
+    the sum of what states actually submitted, so a report that prints the
+    total has to print these too.
+    """
+    stmt = (
+        select(IndicatorValue)
+        .join(Submission, Submission.id == IndicatorValue.submission_id)
+        .where(
+            Submission.period_id == period_id,
+            Submission.is_current.is_(True),
+            IndicatorValue.is_valid.is_(False),
+        )
+    )
+    if state_ids is not None:
+        stmt = stmt.where(Submission.state_id.in_(state_ids or [0]))
+    return list(db.scalars(stmt))
+
+
+def restatements(
+    db: Session, period_id: int, *, state_ids: list[int] | None = None
+) -> list[ValueRevision]:
+    """Figures changed by an accepted correction, for the period restated.
+
+    Keyed on the period the figure *belongs to*, not the period whose query
+    settled it: a cumulative figure that appears to fall is usually put right by
+    restating the earlier period, and it is that earlier period's report which
+    no longer matches what was published.
+    """
+    stmt = (
+        select(ValueRevision)
+        .join(IndicatorValue, IndicatorValue.id == ValueRevision.indicator_value_id)
+        .join(Submission, Submission.id == IndicatorValue.submission_id)
+        .where(Submission.period_id == period_id)
+    )
+    if state_ids is not None:
+        stmt = stmt.where(Submission.state_id.in_(state_ids or [0]))
+    return list(db.scalars(stmt.order_by(ValueRevision.id)))
 
 
 def query_summary(

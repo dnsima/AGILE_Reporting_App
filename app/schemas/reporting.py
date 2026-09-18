@@ -23,6 +23,10 @@ class ReportRequest(BaseModel):
     category_codes: list[str] | None = None
     formats: list[ReportFormat] = Field(default_factory=lambda: [ReportFormat.MARKDOWN])
     include_dqa: bool = True
+    #: The section listing what remains unconfirmed. On by default: a report
+    #: that prints a provisional total without saying so is the failure this
+    #: section exists to prevent.
+    include_queries: bool = True
     include_trends: bool = True
     include_narratives: bool = True
     include_state_tables: bool = True

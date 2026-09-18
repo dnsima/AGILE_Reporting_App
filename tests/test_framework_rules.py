@@ -258,5 +258,5 @@ class TestProvisionalBaseline:
 
         finding = _issues(summary, "CON-002")
         assert finding, "cumulative fall missed because the baseline was rejected"
-        assert "1577" in finding[0].message and "342" in finding[0].message
+        assert "1,577" in finding[0].message and "342" in finding[0].message
         assert "did not pass validation" in finding[0].message

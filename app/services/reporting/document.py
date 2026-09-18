@@ -53,6 +53,18 @@ class ReportDocument:
     summary: str | None = None
     sections: list[Section] = field(default_factory=list)
 
-    def add_section(self, section: Section) -> Section:
-        self.sections.append(section)
+    def add_section(self, section: Section | None) -> Section | None:
+        """Append a section, ignoring ``None`` so a builder can opt out."""
+        if section is not None:
+            self.sections.append(section)
         return section
+
+    def number_sections(self) -> None:
+        """Number the top-level headings in the order they were added.
+
+        Numbering is computed rather than written into each heading, because a
+        report whose sections are conditional cannot hard-code them: inserting
+        one section would silently leave two sections numbered 4.
+        """
+        for index, section in enumerate(self.sections, start=1):
+            section.heading = f"{index}. {section.heading.lstrip('0123456789. ')}"

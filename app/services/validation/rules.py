@@ -21,6 +21,7 @@ from datetime import date
 from typing import Any
 
 from app.core.enums import DQADimension, IndicatorUnit, ReconciliationStatus, Severity
+from app.core.formatting import fmt
 from app.models import Indicator, IndicatorValue, ReportingPeriod, State, Submission
 from app.services.reconciliation import ReconciliationLine
 
@@ -42,8 +43,6 @@ ALLOWED_DISAGGREGATIONS: dict[str, set[str]] = {
 
 #: Weight applied to a failed check when scoring its dimension.
 SEVERITY_PENALTY = {Severity.ERROR: 1.0, Severity.WARNING: 0.45, Severity.INFO: 0.1}
-
-
 @dataclass
 class Finding:
     """One rule failure."""
@@ -209,14 +208,14 @@ def numerator_within_denominator(ctx: RuleContext) -> Iterator[Finding]:
         if value.denominator and value.numerator > value.denominator:
             yield Finding(
                 message=(
-                    f"{indicator.code}: numerator ({value.numerator:g}) exceeds the "
-                    f"denominator ({value.denominator:g})."
+                    f"{indicator.code}: numerator ({fmt(value.numerator)}) exceeds the "
+                    f"denominator ({fmt(value.denominator)})."
                 ),
                 indicator_id=indicator.id,
                 indicator_code=indicator.code,
                 field="numerator",
-                observed=f"{value.numerator:g}",
-                expected=f"<= {value.denominator:g}",
+                observed=f"{fmt(value.numerator)}",
+                expected=f"<= {fmt(value.denominator)}",
                 source_row=value.source_row,
             )
 
@@ -241,13 +240,13 @@ def percentage_arithmetic(ctx: RuleContext) -> Iterator[Finding]:
         if abs(derived - value.value) > tolerance:
             yield Finding(
                 message=(
-                    f"{indicator.code}: reported {value.value:g}% but numerator/denominator "
+                    f"{indicator.code}: reported {fmt(value.value)}% but numerator/denominator "
                     f"gives {derived:.2f}%."
                 ),
                 indicator_id=indicator.id,
                 indicator_code=indicator.code,
                 field="value",
-                observed=f"{value.value:g}",
+                observed=f"{fmt(value.value)}",
                 expected=f"{derived:.2f}",
                 source_row=value.source_row,
             )
@@ -276,14 +275,14 @@ def subset_within_parent(ctx: RuleContext) -> Iterator[Finding]:
             child = indicator_by_code[child_code]
             yield Finding(
                 message=(
-                    f"{child_code} ({totals[child_code]:g}) exceeds {parent_code} "
-                    f"({totals[parent_code]:g}), which it must be a subset of."
+                    f"{child_code} ({fmt(totals[child_code])}) exceeds {parent_code} "
+                    f"({fmt(totals[parent_code])}), which it must be a subset of."
                 ),
                 indicator_id=child.id,
                 indicator_code=child_code,
                 field="value",
-                observed=f"{totals[child_code]:g}",
-                expected=f"<= {totals[parent_code]:g}",
+                observed=f"{fmt(totals[child_code])}",
+                expected=f"<= {fmt(totals[parent_code])}",
             )
 
 
@@ -341,15 +340,15 @@ def composite_equals_parts(ctx: RuleContext) -> Iterator[Finding]:
         if abs(reported - expected) > tolerance:
             yield Finding(
                 message=(
-                    f"{indicator.code} reports {reported:g} but its parts "
-                    f"({' + '.join(parts)}) sum to {expected:g}, a gap of "
+                    f"{indicator.code} reports {fmt(reported)} but its parts "
+                    f"({' + '.join(parts)}) sum to {fmt(expected)}, a gap of "
                     f"{reported - expected:+g}."
                 ),
                 indicator_id=indicator.id,
                 indicator_code=indicator.code,
                 field="value",
-                observed=f"{reported:g}",
-                expected=f"{expected:g}",
+                observed=f"{fmt(reported)}",
+                expected=f"{fmt(expected)}",
                 context={"parts": parts, "gap": round(reported - expected, 4)},
             )
 
@@ -373,13 +372,13 @@ def within_applicable_scope(ctx: RuleContext) -> Iterator[Finding]:
         subcomponent = getattr(indicator.subcomponent, "code", "this sub-component")
         yield Finding(
             message=(
-                f"{indicator.code}: {effective:g} reported, but {ctx.state.name} "
+                f"{indicator.code}: {fmt(effective)} reported, but {ctx.state.name} "
                 f"does not implement {subcomponent}."
             ),
             indicator_id=indicator.id,
             indicator_code=indicator.code,
             field="value",
-            observed=f"{effective:g}",
+            observed=f"{fmt(effective)}",
             expected="blank or zero",
             source_row=value.source_row,
         )
@@ -456,13 +455,13 @@ def plausible_versus_target(ctx: RuleContext) -> Iterator[Finding]:
         if ratio > ceiling:
             yield Finding(
                 message=(
-                    f"{indicator.code}: reported {effective:g} is {ratio:.0f}% of the "
-                    f"{target:g} target."
+                    f"{indicator.code}: reported {fmt(effective)} is {ratio:.0f}% of the "
+                    f"{fmt(target)} target."
                 ),
                 indicator_id=indicator.id,
                 indicator_code=indicator.code,
                 field="value",
-                observed=f"{effective:g}",
+                observed=f"{fmt(effective)}",
                 expected=f"<= {target * ceiling / 100:.0f}",
                 source_row=value.source_row,
                 context={"achievement_pct": round(ratio, 1)},
@@ -497,13 +496,13 @@ def outlier_against_history(ctx: RuleContext) -> Iterator[Finding]:
         if zscore > threshold:
             yield Finding(
                 message=(
-                    f"{indicator.code}: {effective:g} is {zscore:.1f} standard deviations from "
+                    f"{indicator.code}: {fmt(effective)} is {zscore:.1f} standard deviations from "
                     f"this state's historical mean of {mean:.1f}."
                 ),
                 indicator_id=indicator.id,
                 indicator_code=indicator.code,
                 field="value",
-                observed=f"{effective:g}",
+                observed=f"{fmt(effective)}",
                 expected=f"~{mean:.1f}",
                 source_row=value.source_row,
                 context={"zscore": round(zscore, 2)},
@@ -528,7 +527,7 @@ def denominator_usable(ctx: RuleContext) -> Iterator[Finding]:
         if value.denominator in (None, 0):
             yield Finding(
                 message=(
-                    f"{indicator.code}: numerator {value.numerator:g} supplied with a "
+                    f"{indicator.code}: numerator {fmt(value.numerator)} supplied with a "
                     "missing or zero denominator."
                 ),
                 indicator_id=indicator.id,
@@ -576,8 +575,8 @@ def state_concentration(ctx: RuleContext) -> Iterator[Finding]:
                 indicator_id=indicator.id,
                 indicator_code=indicator.code,
                 field="value",
-                observed=f"{effective:g}",
-                expected=f"< {ceiling:.0f}% of {national:g}",
+                observed=f"{fmt(effective)}",
+                expected=f"< {ceiling:.0f}% of {fmt(national)}",
                 source_row=value.source_row,
                 context={"share_pct": round(share, 1), "national_total": national},
             )
@@ -668,13 +667,13 @@ def period_over_period_change(ctx: RuleContext) -> Iterator[Finding]:
             yield Finding(
                 message=(
                     f"{indicator.code}: changed {change:.0f}% from the previous period "
-                    f"({previous:g} to {effective:g}).{ctx.baseline_note}"
+                    f"({fmt(previous)} to {fmt(effective)}).{ctx.baseline_note}"
                 ),
                 indicator_id=indicator.id,
                 indicator_code=indicator.code,
                 field="value",
-                observed=f"{effective:g}",
-                expected=f"within {threshold:.0f}% of {previous:g}",
+                observed=f"{fmt(effective)}",
+                expected=f"within {threshold:.0f}% of {fmt(previous)}",
                 source_row=value.source_row,
                 context={"change_pct": round(change, 1)},
             )
@@ -698,14 +697,14 @@ def cumulative_monotonic(ctx: RuleContext) -> Iterator[Finding]:
         if effective < previous:
             yield Finding(
                 message=(
-                    f"{indicator.code} is cumulative but fell from {previous:g} to "
-                    f"{effective:g}.{ctx.baseline_note}"
+                    f"{indicator.code} is cumulative but fell from {fmt(previous)} to "
+                    f"{fmt(effective)}.{ctx.baseline_note}"
                 ),
                 indicator_id=indicator.id,
                 indicator_code=indicator.code,
                 field="value",
-                observed=f"{effective:g}",
-                expected=f">= {previous:g}",
+                observed=f"{fmt(effective)}",
+                expected=f">= {fmt(previous)}",
                 source_row=value.source_row,
             )
 
@@ -755,22 +754,22 @@ def value_in_range(ctx: RuleContext) -> Iterator[Finding]:
             maximum = 100.0 if maximum is None else maximum
         if minimum is not None and effective < minimum:
             yield Finding(
-                message=f"{indicator.code}: {effective:g} is below the minimum of {minimum:g}.",
+                message=f"{indicator.code}: {fmt(effective)} is below the minimum of {fmt(minimum)}.",
                 indicator_id=indicator.id,
                 indicator_code=indicator.code,
                 field="value",
-                observed=f"{effective:g}",
-                expected=f">= {minimum:g}",
+                observed=f"{fmt(effective)}",
+                expected=f">= {fmt(minimum)}",
                 source_row=value.source_row,
             )
         elif maximum is not None and effective > maximum:
             yield Finding(
-                message=f"{indicator.code}: {effective:g} is above the maximum of {maximum:g}.",
+                message=f"{indicator.code}: {fmt(effective)} is above the maximum of {fmt(maximum)}.",
                 indicator_id=indicator.id,
                 indicator_code=indicator.code,
                 field="value",
-                observed=f"{effective:g}",
-                expected=f"<= {maximum:g}",
+                observed=f"{fmt(effective)}",
+                expected=f"<= {fmt(maximum)}",
                 source_row=value.source_row,
             )
 
@@ -788,11 +787,11 @@ def counts_are_integers(ctx: RuleContext) -> Iterator[Finding]:
             continue
         if abs(effective - round(effective)) > 1e-9:
             yield Finding(
-                message=f"{indicator.code}: headcount reported as {effective:g}.",
+                message=f"{indicator.code}: headcount reported as {fmt(effective)}.",
                 indicator_id=indicator.id,
                 indicator_code=indicator.code,
                 field="value",
-                observed=f"{effective:g}",
+                observed=f"{fmt(effective)}",
                 expected="a whole number",
                 source_row=value.source_row,
             )
@@ -946,8 +945,8 @@ def tracker_agrees_with_framework(ctx: RuleContext) -> Iterator[Finding]:
             indicator_id=line.indicator_id,
             indicator_code=line.indicator_code,
             field="value",
-            observed=f"{line.coarse_value:g}",
-            expected=f"{line.fine_value:g}",
+            observed=f"{fmt(line.coarse_value)}",
+            expected=f"{fmt(line.fine_value)}",
             context={
                 "basis": str(line.basis),
                 "variance": line.variance,
@@ -976,7 +975,7 @@ def framework_covers_the_tracker(ctx: RuleContext) -> Iterator[Finding]:
             indicator_code=line.indicator_code,
             field="value",
             observed="not reported",
-            expected=f"{line.fine_value:g}",
+            expected=f"{fmt(line.fine_value)}",
             context={"basis": str(line.basis), "months": line.part_values},
         )
 
@@ -1002,7 +1001,7 @@ def tracker_covers_the_framework(ctx: RuleContext) -> Iterator[Finding]:
             indicator_id=line.indicator_id,
             indicator_code=line.indicator_code,
             field="value",
-            observed=f"{line.coarse_value:g}",
+            observed=f"{fmt(line.coarse_value)}",
             expected="a monthly figure in the tracker",
             context={"basis": str(line.basis), "months_reported": line.parts_reported},
         )

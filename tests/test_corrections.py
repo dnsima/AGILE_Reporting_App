@@ -134,7 +134,7 @@ class TestBuilding:
         row = _row_for(sheet, flagged["query"].id)
         assert sheet.cell(row, 2).value == "C1.0-02"
         assert sheet.cell(row, 5).value == 342.0
-        assert "fell from 1577 to 342" in sheet.cell(row, 6).value
+        assert "fell from 1,577 to 342" in sheet.cell(row, 6).value
 
     def test_entry_columns_are_left_blank_for_the_state(self, db, flagged):
         content = corrections.build_correction_sheet(db, flagged["state"], flagged["period"])

@@ -52,6 +52,7 @@ from app.core.enums import (
     ReconciliationStatus,
     TimeBasis,
 )
+from app.core.formatting import fmt
 from app.core.logging_config import get_logger
 from app.models import (
     Indicator,
@@ -344,36 +345,36 @@ def _describe(
         if indicator.is_cumulative:
             expectation = (
                 f"{code} is a running total, so the quarter should equal {last}'s figure of "
-                f"{fine_value:g}"
+                f"{fmt(fine_value)}"
             )
         elif indicator.unit in {str(unit) for unit in RATE_UNITS}:
             expectation = (
                 f"{code} is a rate, so the quarter should be the position at {last}: "
-                f"{fine_value:g}"
+                f"{fmt(fine_value)}"
             )
         else:
             expectation = (
                 f"{code} is reported as at the period's end, so the quarter should equal "
-                f"{last}'s figure of {fine_value:g}"
+                f"{last}'s figure of {fmt(fine_value)}"
             )
     elif line_basis is TimeBasis.LATEST:
         last = parts_reported[-1] if parts_reported else "the last month"
         expectation = f"{code} is a status, so the quarter should be {last}'s answer"
     elif line_basis is TimeBasis.SUM:
-        arithmetic = " + ".join(f"{part_values[part]:g}" for part in parts_reported)
+        arithmetic = " + ".join(f"{fmt(part_values[part])}" for part in parts_reported)
         expectation = (
             f"{code} counts what happened within the period, so the quarter should equal "
-            f"{arithmetic} = {fine_value:g}"
+            f"{arithmetic} = {fmt(fine_value)}"
         )
     else:
         expectation = (
             f"{code} is reconciled as the {line_basis.value.lower()} of its months: "
-            f"{fine_value:g}"
+            f"{fmt(fine_value)}"
         )
 
     if status is ReconciliationStatus.MATCHED:
         return f"{expectation}. The quarterly return agrees."
-    return f"{expectation}. The quarterly return says {coarse_value:g}."
+    return f"{expectation}. The quarterly return says {fmt(coarse_value)}."
 
 
 def reconcile_state(

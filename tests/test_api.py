@@ -513,8 +513,27 @@ class TestReporting:
         }
         assert body["indicator_count"] == 4
         assert "Q1 2026" in body["title"]
-        assert "## 1. Reporting status and coverage" in body["markdown"]
-        assert "## 5. Cohort analysis" in body["markdown"]
+        # Section numbers are computed from the order sections were added, so
+        # assert the sequence rather than a fixed number per heading.
+        headings = [
+            line
+            for line in body["markdown"].splitlines()
+            if line.startswith("## ") and line != "## Executive summary"
+        ]
+        assert headings[0] == "## 1. Reporting status and coverage"
+        assert [heading.split(". ", 1)[1] for heading in headings] == [
+            "Reporting status and coverage",
+            "Data quality assessment",
+            "Figures under query",
+            "KPI performance",
+            "State performance and contribution to national results",
+            "Cohort analysis",
+            "Trend analysis",
+            "KPI narratives",
+        ]
+        assert [heading.split(".", 1)[0] for heading in headings] == [
+            "## 1", "## 2", "## 3", "## 4", "## 5", "## 6", "## 7", "## 8",
+        ]
 
     def test_report_is_downloadable(self, client, ingested):
         report = client.post(

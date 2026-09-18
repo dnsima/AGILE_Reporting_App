@@ -8,12 +8,12 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.enums import ReportFormat, ReportScope
+from app.core.enums import QueryStatus, ReportFormat, ReportScope
 from app.core.errors import ValidationError
 from app.core.logging_config import get_logger
 from app.models import GeneratedReport, Indicator, ReportingPeriod, User
 from app.schemas.reporting import ReportArtifact, ReportRequest, ReportResponse
-from app.services import analytics, audit, dqa, reference
+from app.services import analytics, audit, dqa, queries, reference
 from app.services import cohort as cohort_service
 from app.services.reporting.document import ReportDocument, Section, Table
 from app.services.reporting.renderers import (
@@ -115,7 +115,7 @@ def _indicator_narrative(
 # --------------------------------------------------------------------------
 def _reporting_status_section(db: Session, period: ReportingPeriod) -> Section:
     summary = dqa.national_summary(db, period)
-    section = Section(heading="1. Reporting status and coverage")
+    section = Section(heading="Reporting status and coverage")
     section.add_paragraph(
         f"{summary.states_reported} of {summary.states_expected} states submitted data for "
         f"{period.code} ({_pct(summary.reporting_rate_pct)} reporting rate). "
@@ -154,7 +154,7 @@ def _reporting_status_section(db: Session, period: ReportingPeriod) -> Section:
 
 
 def _dqa_section(db: Session, period: ReportingPeriod, scope: ReportScope, scope_ref: str | None) -> Section:
-    section = Section(heading="2. Data quality assessment")
+    section = Section(heading="Data quality assessment")
     summary = dqa.national_summary(db, period)
 
     if scope == ReportScope.STATE and scope_ref:
@@ -259,6 +259,250 @@ def _dqa_section(db: Session, period: ReportingPeriod, scope: ReportScope, scope
     return section
 
 
+# --------------------------------------------------------------------------
+# Figures under query
+# --------------------------------------------------------------------------
+#: Individual queries listed before the table is summarised instead.
+MAX_LISTED_QUERIES = 40
+
+
+def _scope_state_ids(
+    db: Session, scope: ReportScope, scope_ref: str | None
+) -> list[int] | None:
+    """State ids this report covers; ``None`` for a national report."""
+    if scope == ReportScope.STATE and scope_ref:
+        return [reference.get_state_by_code(db, scope_ref).id]
+    if scope == ReportScope.COHORT and scope_ref:
+        return [state.id for state in reference.active_states(db, scope_ref)]
+    return None
+
+
+def _query_section(
+    db: Session,
+    period: ReportingPeriod,
+    indicators: list[Indicator],
+    scope: ReportScope,
+    scope_ref: str | None,
+) -> Section:
+    """What remains unresolved, and what it does to the figures above.
+
+    A figure under query is not missing and not wrong; it is unconfirmed. The
+    report publishes anyway -- a reporting cycle cannot wait on a query -- so it
+    has to say plainly which figures are still open, which are held out of the
+    totals printed above, and which are waiting on a physical check. That last
+    list is the supervision and DQA worklist: it is how an unconfirmed figure
+    becomes something someone actually goes and looks at.
+    """
+    section = Section(heading="Figures under query")
+    state_ids = _scope_state_ids(db, scope, scope_ref)
+
+    summary = queries.query_summary(db, period.id, state_ids=state_ids)
+    open_rows = queries.open_queries(db, period_id=period.id)
+    if state_ids is not None:
+        allowed = set(state_ids)
+        open_rows = [row for row in open_rows if row.state_id in allowed]
+
+    if not summary["total"]:
+        section.add_paragraph(
+            f"No figure reported for {period.code} was queried. Every figure in this report "
+            "is as the reporting state submitted it, and none is held out of the totals above."
+        )
+        return section
+
+    held = queries.held_figures(db, period.id, state_ids=state_ids)
+    in_scope = {indicator.id for indicator in indicators}
+    held_in_scope = [value for value in held if value.indicator_id in in_scope]
+
+    section.add_paragraph(
+        f"{summary['open']} of the {summary['total']} figures queried for {period.code} remain "
+        f"unresolved, across {summary['states_with_open_queries']} state(s). "
+        f"{summary['overdue']} are past the date the state was given to respond, and "
+        f"{summary['awaiting_review']} carry a response now with the NPCU. "
+        f"{summary['resolved']} have been settled, {summary['restated']} of them by a "
+        "correction accepted on the evidence the state supplied."
+    )
+    section.add_paragraph(
+        f"{len(held_in_scope)} figure(s) covering indicators in this report are held out of the "
+        "consolidated totals above until their query is settled. They are on record and shown "
+        "below, but they are not counted: a national total that silently included a figure the "
+        "rules could not accept would be neither what the states reported nor what the NPCU "
+        "can stand behind."
+        if held_in_scope
+        else "No figure covering an indicator in this report is held out of the totals above."
+    )
+
+    # Which printed figures are provisional, and by how much.
+    if held_in_scope:
+        by_indicator: dict[int, list] = {}
+        for value in held_in_scope:
+            by_indicator.setdefault(value.indicator_id, []).append(value)
+        catalogue = {indicator.id: indicator for indicator in indicators}
+        section.add_table(
+            Table(
+                caption="Indicators whose national total in this report excludes a held figure",
+                headers=["KPI", "Indicator", "States held out", "Excluded figures"],
+                rows=[
+                    [
+                        catalogue[indicator_id].code,
+                        catalogue[indicator_id].name,
+                        ", ".join(
+                            sorted(
+                                value.submission.state.code
+                                for value in rows
+                                if value.submission and value.submission.state
+                            )
+                        ),
+                        str(len(rows)),
+                    ]
+                    for indicator_id, rows in sorted(
+                        by_indicator.items(), key=lambda item: catalogue[item[0]].number
+                    )
+                ],
+                align=["left", "left", "left", "right"],
+                note=(
+                    "Treat these totals as provisional. Each will move when the query behind it "
+                    "is settled, in either direction."
+                ),
+            )
+        )
+
+    # Where the unresolved work sits.
+    by_state: dict[str, dict] = {}
+    for row in open_rows:
+        entry = by_state.setdefault(
+            row.state.name,
+            {"open": 0, "overdue": 0, "awaiting": 0, "verification": 0, "oldest": None},
+        )
+        entry["open"] += 1
+        if row.is_overdue():
+            entry["overdue"] += 1
+        if row.status == str(QueryStatus.RESPONDED):
+            entry["awaiting"] += 1
+        if row.verification_required:
+            entry["verification"] += 1
+        if row.due_date and (entry["oldest"] is None or row.due_date < entry["oldest"]):
+            entry["oldest"] = row.due_date
+
+    if by_state:
+        section.add_table(
+            Table(
+                caption="Unresolved queries by state",
+                headers=[
+                    "State", "Open", "Overdue", "With the NPCU", "For verification", "Earliest due",
+                ],
+                rows=[
+                    [
+                        name,
+                        str(entry["open"]),
+                        str(entry["overdue"]),
+                        str(entry["awaiting"]),
+                        str(entry["verification"]),
+                        entry["oldest"].isoformat() if entry["oldest"] else "—",
+                    ]
+                    for name, entry in sorted(
+                        by_state.items(), key=lambda item: (-item[1]["open"], item[0])
+                    )
+                ],
+                align=["left", "right", "right", "right", "right", "left"],
+            )
+        )
+
+    # The figures themselves.
+    listed = sorted(
+        open_rows,
+        key=lambda row: (
+            not row.is_overdue(),
+            row.state.name,
+            row.indicator.code if row.indicator else "",
+        ),
+    )
+    truncated = len(listed) > MAX_LISTED_QUERIES
+    section.add_table(
+        Table(
+            caption="Figures still under query",
+            headers=["Ref", "State", "KPI", "As reported", "Raised because", "Due", "Status"],
+            rows=[
+                [
+                    f"Q-{row.id}",
+                    row.state.code,
+                    row.indicator.code if row.indicator else "—",
+                    _fmt(row.reported_value),
+                    row.title,
+                    row.due_date.isoformat() if row.due_date else "—",
+                    row.status.title() + (f" ({row.days_overdue()}d late)" if row.is_overdue() else ""),
+                ]
+                for row in listed[:MAX_LISTED_QUERIES]
+            ],
+            align=["left", "left", "left", "right", "left", "left", "left"],
+            note=(
+                f"The {MAX_LISTED_QUERIES} most pressing of {len(listed)} are listed; the full "
+                "list is on the platform."
+                if truncated
+                else None
+            ),
+        )
+    )
+
+    # The supervision worklist: what to go and look at.
+    verification = [row for row in open_rows if row.verification_required]
+    if verification:
+        section.add_paragraph(
+            f"{len(verification)} figure(s) could not be settled on the evidence supplied and "
+            "have been referred for physical verification. These are the items to carry into "
+            "the next supportive supervision or DQA exercise."
+        )
+        section.add_table(
+            Table(
+                caption="Referred for physical verification",
+                headers=["Ref", "State", "KPI", "Indicator", "As reported", "Referred because"],
+                rows=[
+                    [
+                        f"Q-{row.id}",
+                        row.state.code,
+                        row.indicator.code if row.indicator else "—",
+                        row.indicator.name if row.indicator else "—",
+                        _fmt(row.reported_value),
+                        row.resolution_note or row.title,
+                    ]
+                    for row in verification
+                ],
+                align=["left", "left", "left", "left", "right", "left"],
+            )
+        )
+
+    # What changed since this period was last published.
+    revisions = queries.restatements(db, period.id, state_ids=state_ids)
+    if revisions:
+        section.add_paragraph(
+            f"{len(revisions)} figure(s) for {period.code} have been restated since they were "
+            "first reported. The figure as first reported is kept on record, so a report "
+            "published earlier can be reconciled against this one."
+        )
+        section.add_table(
+            Table(
+                caption="Figures restated for this period",
+                headers=["State", "KPI", "As first reported", "As now stated", "Why"],
+                rows=[
+                    [
+                        revision.indicator_value.submission.state.code,
+                        (
+                            revision.indicator_value.indicator.code
+                            if revision.indicator_value.indicator
+                            else "—"
+                        ),
+                        _fmt(revision.previous_value),
+                        _fmt(revision.new_value),
+                        revision.reason,
+                    ]
+                    for revision in revisions
+                ],
+                align=["left", "left", "right", "right", "left"],
+            )
+        )
+
+    return section
+
+
 def _kpi_section(
     db: Session,
     period: ReportingPeriod,
@@ -266,7 +510,7 @@ def _kpi_section(
     scope: ReportScope,
     scope_ref: str | None,
 ) -> Section:
-    section = Section(heading="3. KPI performance")
+    section = Section(heading="KPI performance")
     board = analytics.scorecard(
         db,
         period,
@@ -307,7 +551,7 @@ def _kpi_section(
 def _state_contribution_section(
     db: Session, period: ReportingPeriod, indicators: list[Indicator]
 ) -> Section:
-    section = Section(heading="4. State performance and contribution to national results")
+    section = Section(heading="State performance and contribution to national results")
     rankings = []
     for state in reference.active_states(db):
         board = analytics.scorecard(
@@ -376,7 +620,7 @@ def _state_contribution_section(
 
 
 def _cohort_section(db: Session, period: ReportingPeriod, indicators: list[Indicator]) -> Section:
-    section = Section(heading="5. Cohort analysis")
+    section = Section(heading="Cohort analysis")
     summaries = cohort_service.cohort_summaries(db, period, indicators=indicators)
     section.add_paragraph(
         "Performance is disaggregated by AGILE financing cohort so states are compared against "
@@ -424,7 +668,7 @@ def _trend_section(
     scope_ref: str | None,
     trend_periods: int,
 ) -> Section:
-    section = Section(heading="6. Trend analysis")
+    section = Section(heading="Trend analysis")
     section.add_paragraph(
         f"Longitudinal movement over the last {trend_periods} reporting periods of the same type, "
         "for the indicators covered by this report."
@@ -473,7 +717,7 @@ def _narrative_section(
     include_trends: bool,
     trend_periods: int,
 ) -> Section:
-    section = Section(heading="7. KPI narratives")
+    section = Section(heading="KPI narratives")
     for indicator in indicators[:MAX_NARRATIVE_INDICATORS]:
         analysis = analytics.analyse_indicator(db, indicator, period)
         series = (
@@ -569,9 +813,47 @@ def build_report(
         f"{board.indicators_with_target} measurable indicators at or above 90% of target."
     )
 
+    # A caveat that only appears in its own section has been read too late.
+    query_counts = queries.query_summary(
+        db, period.id, state_ids=_scope_state_ids(db, scope, scope_ref)
+    )
+    if query_counts["open"]:
+        held = len(
+            [
+                value
+                for value in queries.held_figures(
+                    db, period.id, state_ids=_scope_state_ids(db, scope, scope_ref)
+                )
+                if value.indicator_id in {indicator.id for indicator in indicators}
+            ]
+        )
+        document.summary += (
+            f" {query_counts['open']} figure(s) remain under query across "
+            f"{query_counts['states_with_open_queries']} state(s)"
+            + (
+                f", of which {held} are held out of the totals above, so those totals are "
+                "provisional"
+                if held
+                else ""
+            )
+            + "."
+            # The caveat stands whether or not the detail was asked for; only
+            # the pointer is conditional, so it never names a missing section.
+            + (
+                " Section details are given under 'Figures under query'."
+                if request.include_queries
+                else " The detail section was excluded from this report."
+            )
+        )
+
     document.add_section(_reporting_status_section(db, period))
     if request.include_dqa:
         document.add_section(_dqa_section(db, period, scope, scope_ref))
+    # Before the numbers, not after: what is unconfirmed qualifies every figure
+    # that follows, and a reader who meets it in an appendix has already drawn
+    # conclusions from totals they did not know were provisional.
+    if request.include_queries:
+        document.add_section(_query_section(db, period, indicators, scope, scope_ref))
     document.add_section(_kpi_section(db, period, indicators, scope, scope_ref))
     if request.include_state_tables and scope != ReportScope.STATE:
         document.add_section(_state_contribution_section(db, period, indicators))
@@ -585,6 +867,7 @@ def build_report(
             _narrative_section(db, period, indicators, request.include_trends, request.trend_periods)
         )
 
+    document.number_sections()
     return document, indicators, period
 
 

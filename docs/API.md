@@ -385,6 +385,7 @@ Request body:
   "category_codes": ["PDO"],
   "formats": ["markdown", "html", "pdf"],
   "include_dqa": true,
+  "include_queries": true,
   "include_trends": true,
   "include_narratives": true,
   "include_state_tables": true,
@@ -395,6 +396,42 @@ Request body:
 `scope_ref` is a state code for `STATE` scope and a cohort code for `COHORT`
 scope. `STATE_PIU` accounts may only generate state-scoped reports for their own
 state.
+
+Section numbers are computed from the order the sections were added, so a
+report with a section switched off is still numbered 1..n with no gap.
+
+### Figures under query
+
+A reporting cycle cannot wait on a query, so the report publishes anyway. What
+it must not do is print a provisional total as though it were settled, and
+`include_queries` (default true) is what stops it. The section sits **before**
+the KPI numbers, because what is unconfirmed qualifies every figure that
+follows and a reader who meets it in an appendix has already drawn conclusions.
+The same caveat is repeated in the executive summary, which is the part that
+actually gets read; it stands even when the detail section is switched off.
+
+The section carries:
+
+1. **How much is unresolved** — open, overdue, sitting with the NPCU, settled,
+   and how many were settled by an accepted correction.
+2. **Which printed totals are provisional** — the indicators in this report
+   whose national total excludes a held figure, and which states are held out.
+   This is the part that makes the section load-bearing rather than an
+   appendix: a national total that silently included a figure the rules could
+   not accept would be neither what the states reported nor what the NPCU can
+   stand behind.
+3. **Where the work sits** — unresolved queries per state, with the earliest
+   response date outstanding.
+4. **The figures themselves** — reference, state, KPI, the figure as reported
+   and the finding verbatim, capped at 40 with a note when there are more.
+5. **Referred for physical verification** — the items to carry into the next
+   supportive supervision or DQA exercise. An unconfirmed figure becomes
+   something someone goes and looks at.
+6. **Figures restated for this period** — what changed and why, so a report
+   published earlier can be reconciled against this one.
+
+Scope is honoured: a state report covers that state's queries, a cohort report
+that cohort's.
 
 ## Administration
 

@@ -178,3 +178,5 @@ class ValueRevision(Base, TimestampMixin):
     proposed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     approved_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    indicator_value: Mapped["IndicatorValue"] = relationship()  # noqa: F821
