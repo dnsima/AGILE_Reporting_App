@@ -98,6 +98,28 @@ def _row_header_score(values: list[Any]) -> int:
     return score
 
 
+def _is_section_banner(values: list[Any], width: int) -> bool:
+    """True for a row that groups the rows beneath it rather than carrying data.
+
+    Templates -- the AGILE ones and the NPCU's own tracker alike -- break the
+    indicator list up with a merged band naming the component. Excel stores a
+    merged band as its text in the first cell and blanks in the rest, so such a
+    row arrives here as a single populated cell at the left of a wide sheet. It
+    is a heading, not an indicator, and counting it as an unmapped row would
+    charge the state an integrity finding for the template's own formatting.
+    """
+    if width < 3:
+        return False
+    populated = [
+        index
+        for index, cell in enumerate(values)
+        if cell is not None and str(cell).strip() not in {"", "nan"}
+    ]
+    if len(populated) != 1 or populated[0] > 1:
+        return False
+    return not _looks_numeric(str(values[populated[0]]).strip())
+
+
 def _looks_numeric(text: str) -> bool:
     try:
         float(text.replace(",", "").replace("%", "").strip())
@@ -161,12 +183,16 @@ def _frame_to_sheet(raw: pd.DataFrame, sheet_name: str | None) -> ParsedSheet:
 
     body = raw.iloc[header_row + 1 :].reset_index(drop=True)
     rows: list[dict[str, Any]] = []
+    banners = 0
     for offset, (_, series) in enumerate(body.iterrows()):
         values = series.tolist()
         record = {
             headers[i]: (values[i] if i < len(values) else None) for i in range(len(headers))
         }
         if all(value is None or str(value).strip() in {"", "nan"} for value in record.values()):
+            continue
+        if _is_section_banner(values, len(headers)):
+            banners += 1
             continue
         position = header_row + 1 + offset
         record["__row__"] = (
@@ -178,6 +204,11 @@ def _frame_to_sheet(raw: pd.DataFrame, sheet_name: str | None) -> ParsedSheet:
 
     if not rows:
         raise IngestionError("No data rows were found beneath the header row")
+
+    if banners:
+        warnings.append(
+            f"Skipped {banners} section heading row(s) that group the indicators below them."
+        )
 
     return ParsedSheet(
         headers=headers,

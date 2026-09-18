@@ -14,8 +14,8 @@ from app.api.deps import (
     require,
     visible_state_codes,
 )
-from app.core.enums import Permission, Role, SubmissionStatus
-from app.core.errors import NotFoundError, PermissionDeniedError
+from app.core.enums import PeriodType, Permission, Role, SubmissionStatus
+from app.core.errors import NotFoundError, PermissionDeniedError, ValidationError
 from app.models import Indicator, IndicatorValue, State, Submission
 from app.schemas.common import Message
 from app.schemas.ingestion import (
@@ -28,7 +28,7 @@ from app.schemas.ingestion import (
 )
 from app.schemas.validation import ValidationSummary
 from app.services import audit, reference
-from app.services.ingestion import build_template_workbook, ingest_manual, ingest_upload
+from app.services.ingestion import build_reporting_template, ingest_manual, ingest_upload
 from app.services.ingestion.pipeline import (
     approve_submission,
     reject_submission,
@@ -93,32 +93,51 @@ def _load_submission(db, submission_id: int, principal) -> Submission:
 # --------------------------------------------------------------------------
 @router.get(
     "/template",
-    summary="Download the standardised reporting template",
+    summary="Download the reporting template for one state and period",
     response_class=Response,
 )
 def download_template(
     db: DbSession,
     principal: CurrentPrincipal,
-    state: str | None = Query(default=None, description="Pre-fill the state"),
-    period: str | None = Query(default=None, description="Pre-fill the reporting period"),
+    state: str | None = Query(default=None, description="State the template is issued to"),
+    period: str | None = Query(default=None, description="Reporting period to report against"),
 ) -> Response:
-    state_row = reference.get_state_by_code(db, state, required=False) if state else None
-    period_row = reference.get_period_by_code(db, period, required=False) if period else None
-    if state_row is not None:
-        enforce_state_scope(db, principal, state_row.code)
+    """Issue the template a state fills in.
 
-    indicators = reference.active_indicators(db)
-    payload = build_template_workbook(indicators, state_row, period_row)
-    filename = "AGILE_reporting_template"
-    if state_row:
-        filename += f"_{state_row.code}"
-    if period_row:
-        filename += f"_{period_row.code}"
+    The template is built per state and per period rather than handed out as one
+    generic workbook: it carries the state's approved targets, locks the rows
+    for sub-components that state does not implement, and shows what it already
+    reported in the preceding periods. The period type picks the layout --
+    monthly issues the performance tracker, anything else the results framework.
+    """
+    state_row = reference.get_state_by_code(db, state, required=False) if state else None
+    if state_row is None and principal.is_state_scoped:
+        state_row = db.get(State, principal.state_id)
+    if state_row is None:
+        raise ValidationError(
+            "Name the state the template is for. Templates carry that state's targets and "
+            "lock the sub-components it does not implement, so there is no generic one."
+        )
+    enforce_state_scope(db, principal, state_row.code)
+
+    period_row = reference.get_period_by_code(db, period, required=False) if period else None
+    if period_row is None:
+        period_row = reference.latest_period(db, str(PeriodType.QUARTERLY))
+    if period_row is None:
+        raise ValidationError("No reporting period has been defined yet.")
+
+    payload = build_reporting_template(db, state_row, period_row)
+    stream = (
+        "performance_tracker"
+        if period_row.period_type == PeriodType.MONTHLY
+        else "results_framework"
+    )
+    filename = f"AGILE_{stream}_{state_row.code}_{period_row.code}.xlsx"
 
     return Response(
         content=payload,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

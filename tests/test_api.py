@@ -223,7 +223,10 @@ class TestReferenceData:
         )
         assert response.status_code == 200
         assert response.content[:2] == b"PK"  # a zip container, i.e. xlsx
-        assert "AGILE_reporting_template_KN_2026-Q1.xlsx" in response.headers["content-disposition"]
+        assert (
+            "AGILE_results_framework_KN_2026-Q1.xlsx"
+            in response.headers["content-disposition"]
+        )
 
     def test_period_generation_creates_a_full_calendar(self, client, admin_headers):
         response = client.post(

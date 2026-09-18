@@ -106,7 +106,7 @@ dimension is measured against them.
 
 | Method | Path | Permission |
 |---|---|---|
-| `GET` | `/ingestion/template` | `data:read` — download the standard `.xlsx` template |
+| `GET` | `/ingestion/template` | `data:read` — the `.xlsx` template for one state and period |
 | `POST` | `/ingestion/upload` | `data:upload` — multipart file upload |
 | `POST` | `/ingestion/submissions` | `data:upload` — JSON submission for system integrations |
 | `GET` | `/ingestion/submissions` | `data:read` — state-scoped for `STATE_PIU` |
@@ -116,6 +116,35 @@ dimension is measured against them.
 | `POST` | `/ingestion/submissions/{id}/reject` | `data:approve` |
 | `POST` | `/ingestion/submissions/{id}/revalidate` | `data:approve` — after a rule change |
 | `DELETE` | `/ingestion/submissions/{id}` | `data:delete` (administrators) |
+
+### The reporting template
+
+`GET /ingestion/template?state=KEBBI&period=2026-Q2` builds the workbook that
+state fills in. It is generated per state and per period rather than handed out
+as one generic file, and that is what closes the gaps the NPCU's consolidation
+notes record:
+
+* **every row carries its indicator code**, so a reworded label cannot silently
+  drop a figure — monthly-to-quarterly reconciliation becomes a code join, not
+  a match on indicator names;
+* **the state is bound at upload**, never read from the file, so a copy of
+  another state's workbook cannot submit under the wrong name;
+* **only the state's own approved target is shown.** National targets are
+  deliberately withheld: a state shown the national figure reports against it;
+* **each row states the basis its figure must be on** — cumulative to date, a
+  month-end snapshot, a rate, Yes/No — instead of one column header that cannot
+  say all four at once;
+* **rows for sub-components the state does not implement are locked** and
+  marked not applicable, so a blank there is never read as a data gap. Ekiti is
+  served 51 of the 53 rows, a Limited Financing state 37.
+
+The period type picks the layout: a monthly period issues the performance
+tracker, anything else the results framework. Both are built from the one
+indicator catalogue, so the two streams carry identical codes and wording.
+
+The sheet is protected, with only the entry, data-source and comment cells
+unlocked. There is no password — a state can unlock it if it must, and the
+platform validates what arrives regardless.
 
 ### Uploading
 

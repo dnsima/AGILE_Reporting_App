@@ -244,9 +244,18 @@
 
     $("upload-form").addEventListener("submit", submitUpload);
     $("template-btn").addEventListener("click", function () {
+      // The template is built for one state and one period: it carries that
+      // state's approved targets, locks the sub-components it does not
+      // implement and shows what it already reported. There is no generic one.
+      const stateCode = $("upload-state").value;
+      const periodCode = $("upload-period").value;
+      if (!stateCode || !periodCode) {
+        toast("Choose a state and a reporting period first.", "error");
+        return;
+      }
       window.location.href = api.downloadUrl("/ingestion/template", {
-        state: $("upload-state").value,
-        period: $("upload-period").value,
+        state: stateCode,
+        period: periodCode,
       });
     });
     $("report-form").addEventListener("submit", submitReport);
