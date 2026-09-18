@@ -261,6 +261,30 @@
     });
 
     $("upload-form").addEventListener("submit", submitUpload);
+    $("upload-period").addEventListener("change", function () {
+      if (state.view === "upload") render();
+    });
+    $("upload-state").addEventListener("change", renderPeriodLock);
+    $("cycle-close-btn").addEventListener("click", function () {
+      cycleAction("/close", { note: $("cycle-note").value.trim() || null },
+        "Cycle closed. Corrections still land through the query workflow.");
+    });
+    $("cycle-reopen-btn").addEventListener("click", function () {
+      const reason = $("cycle-note").value.trim();
+      if (!reason) {
+        return toast("Say why the cycle is being reopened — every state gets back in.", "error");
+      }
+      cycleAction("/reopen", { reason: reason }, "Cycle reopened to every state.");
+    });
+    $("grant-btn").addEventListener("click", function () {
+      const reason = $("cycle-note").value.trim();
+      if (!reason) return toast("Say why this state may file again.", "error");
+      cycleAction(
+        "/reopenings",
+        { state_code: $("grant-state").value, reason: reason },
+        $("grant-state").value + " may file one more return for this cycle."
+      );
+    });
     $("template-btn").addEventListener("click", function () {
       // The template is built for one state and one period: it carries that
       // state's approved targets, locks the sub-components it does not
@@ -1237,7 +1261,105 @@
   }
 
   // -- upload ---------------------------------------------------------------
+  // -- the reporting cycle ---------------------------------------------------
+  // A closed cycle takes no new file. It is not a dead end -- a correction
+  // still lands through the query workflow -- so the banner says so rather
+  // than leaving a state to discover the refusal at upload time.
+
+  function canManageReference() {
+    return (state.user.permissions || []).indexOf("reference:manage") !== -1;
+  }
+
+  function periodByCode(code) {
+    return state.periods.find((p) => p.code === code) || null;
+  }
+
+  async function renderPeriodLock() {
+    const banner = $("period-lock");
+    const period = periodByCode($("upload-period").value);
+    if (!period || period.is_open) {
+      banner.hidden = true;
+      return;
+    }
+
+    const uploadState = $("upload-state").value;
+    const granted = (period.reopened_for || []).indexOf(uploadState) !== -1;
+    banner.hidden = false;
+    banner.className = "lock-banner " + (granted ? "granted" : "closed");
+    const closedOn = period.locked_at
+      ? " on " + new Date(period.locked_at).toLocaleDateString()
+      : "";
+    banner.innerHTML = granted
+      ? "<strong>" + esc(period.label) + " is closed, but " + esc(uploadState) +
+        " holds a reopening.</strong>This upload will use it. A reopening admits one return."
+      : "<strong>" + esc(period.label) + " was closed" + esc(closedOn) + ".</strong>" +
+        (period.lock_note ? esc(period.lock_note) + " " : "") +
+        "It takes no new file. To correct a figure, answer its query with evidence — that " +
+        "works on a closed cycle and keeps the original on record. To re-file the return " +
+        "itself, ask the NPCU for a reopening.";
+  }
+
+  async function renderCycle() {
+    const panel = $("cycle-panel");
+    if (!canManageReference()) {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+
+    const code = $("upload-period").value;
+    const period = periodByCode(code);
+    if (!period) return;
+
+    $("cycle-caption").textContent =
+      period.label + " — " + (period.is_open ? "open to submissions" : "closed");
+    $("cycle-close-btn").disabled = !period.is_open;
+    $("cycle-reopen-btn").disabled = period.is_open;
+    $("grant-row").hidden = period.is_open;
+    $("grant-state").innerHTML = state.states
+      .map((row) => '<option value="' + row.code + '">' + row.name + "</option>")
+      .join("");
+
+    if (period.is_open) {
+      $("reopenings-table").innerHTML =
+        '<p class="muted">Nothing to reopen while the cycle is open.</p>';
+      return;
+    }
+
+    const grants = await api.get("/reference/periods/" + code + "/reopenings");
+    $("reopenings-table").innerHTML = table(
+      [
+        { label: "State", render: (r) => esc(r.state_name || r.state_code) },
+        { label: "Status", render: (r) => badge(r.status.toLowerCase()) },
+        { label: "Reason", render: (r) => esc(r.reason) },
+        { label: "Granted by", render: (r) => esc(r.granted_by || "—") },
+        { label: "Expires", render: (r) => r.expires_on || "—" },
+        {
+          label: "Used by",
+          render: (r) => (r.consumed_submission_id ? "#" + r.consumed_submission_id : "—"),
+        },
+      ],
+      grants
+    );
+  }
+
+  async function cycleAction(path, payload, success) {
+    const code = $("upload-period").value;
+    try {
+      await api.post("/reference/periods/" + code + path, payload);
+      toast(success, "success");
+      // The lock state lives on the cached period list; refresh it.
+      state.periods = await api.get("/reference/periods");
+      await renderPeriodLock();
+      await renderCycle();
+    } catch (error) {
+      fail(error, "Reporting cycle");
+    }
+  }
+
   async function renderUpload() {
+    await renderPeriodLock();
+    await renderCycle();
     const submissions = await api.get("/ingestion/submissions", {
       period: state.period,
       state: state.stateCode || undefined,

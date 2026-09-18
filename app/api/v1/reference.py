@@ -8,22 +8,37 @@ from sqlalchemy import func, select
 from app.api.deps import CurrentPrincipal, DbSession, require
 from app.core.enums import PeriodType, Permission, TargetLevel
 from app.core.errors import NotFoundError
-from app.models import Cohort, Indicator, IndicatorCategory, State, Target
+from app.models import (
+    Cohort,
+    Indicator,
+    IndicatorCategory,
+    PeriodReopening,
+    ReportingPeriod,
+    State,
+    Target,
+    User,
+)
 from app.schemas.common import Message
 from app.schemas.reference import (
     CohortRead,
     IndicatorCategoryRead,
     IndicatorRead,
     IndicatorUpdate,
+    PeriodCloseRequest,
     PeriodCreate,
     PeriodGenerate,
     PeriodRead,
+    PeriodReopenRequest,
+    ReopeningCreate,
+    ReopeningRead,
+    ReopeningRevoke,
     StateRead,
     StateUpdate,
     TargetBulkUpsert,
     TargetRead,
 )
 from app.services import audit, reference
+from app.services import periods as period_service
 
 router = APIRouter(prefix="/reference", tags=["Reference data"])
 
@@ -259,6 +274,46 @@ def update_indicator(
 # --------------------------------------------------------------------------
 # Reporting periods
 # --------------------------------------------------------------------------
+def _period_read(db, period: ReportingPeriod) -> PeriodRead:
+    return PeriodRead(
+        **{
+            field: getattr(period, field)
+            for field in (
+                "id", "code", "label", "period_type", "fiscal_year", "sequence",
+                "start_date", "end_date", "due_date", "is_open", "locked_at", "lock_note",
+            )
+        },
+        reopened_for=sorted(
+            grant.state.code
+            for grant in period_service.reopenings(
+                db, period_id=period.id, active_only=True
+            )
+        ),
+    )
+
+
+def _reopening_read(db, grant: PeriodReopening) -> ReopeningRead:
+    granted_by = db.get(User, grant.granted_by_id) if grant.granted_by_id else None
+    return ReopeningRead(
+        id=grant.id,
+        period_id=grant.period_id,
+        period_code=grant.period.code if grant.period else None,
+        state_id=grant.state_id,
+        state_code=grant.state.code if grant.state else None,
+        state_name=grant.state.name if grant.state else None,
+        reason=grant.reason,
+        status=grant.status,
+        granted_by=(granted_by.full_name or granted_by.email) if granted_by else None,
+        granted_at=grant.granted_at,
+        expires_on=grant.expires_on,
+        consumed_at=grant.consumed_at,
+        consumed_submission_id=grant.consumed_submission_id,
+        revoked_at=grant.revoked_at,
+        revoke_reason=grant.revoke_reason,
+    )
+
+
+
 @router.get("/periods", response_model=list[PeriodRead], summary="List reporting periods")
 def list_periods(
     db: DbSession,
@@ -269,7 +324,7 @@ def list_periods(
     periods = reference.ordered_periods(db, str(period_type) if period_type else None)
     if fiscal_year:
         periods = [p for p in periods if p.fiscal_year == fiscal_year]
-    return [PeriodRead.model_validate(period) for period in periods]
+    return [_period_read(db, period) for period in periods]
 
 
 @router.get(
@@ -283,7 +338,7 @@ def current_period(
     period = reference.latest_period(db, str(period_type) if period_type else None)
     if period is None:
         raise NotFoundError("No reporting periods have been configured yet")
-    return PeriodRead.model_validate(period)
+    return _period_read(db, period)
 
 
 @router.post(
@@ -311,7 +366,7 @@ def create_period(
         summary=f"Created reporting period {period.code}.",
     )
     db.commit()
-    return PeriodRead.model_validate(period)
+    return _period_read(db, period)
 
 
 @router.post(
@@ -336,7 +391,7 @@ def generate_periods(
         summary=f"Generated the {payload.fiscal_year} reporting calendar ({len(periods)} periods).",
     )
     db.commit()
-    return [PeriodRead.model_validate(period) for period in periods]
+    return [_period_read(db, period) for period in periods]
 
 
 @router.post(
@@ -346,22 +401,103 @@ def generate_periods(
 )
 def close_period(
     period_code: str,
+    payload: PeriodCloseRequest,
     db: DbSession,
     principal=Depends(require(Permission.REFERENCE_MANAGE)),
 ) -> PeriodRead:
+    """Close the cycle. Corrections still land through the query workflow."""
     period = reference.get_period_by_code(db, period_code)
-    period.is_open = False
-    audit.record(
+    period_service.close_period(db, period, actor=principal.user, note=payload.note)
+    db.commit()
+    return _period_read(db, period)
+
+
+@router.post(
+    "/periods/{period_code}/reopen",
+    response_model=PeriodRead,
+    summary="Reopen a closed period to every state",
+)
+def reopen_period(
+    period_code: str,
+    payload: PeriodReopenRequest,
+    db: DbSession,
+    principal=Depends(require(Permission.REFERENCE_MANAGE)),
+) -> PeriodRead:
+    """Reopen the whole cycle.
+
+    Blunt on purpose. Where one state needs to re-file, grant that state a
+    reopening instead: reopening the period lets every other state change
+    figures nobody asked about.
+    """
+    period = reference.get_period_by_code(db, period_code)
+    period_service.reopen_period(db, period, reason=payload.reason, actor=principal.user)
+    db.commit()
+    return _period_read(db, period)
+
+
+@router.get(
+    "/periods/{period_code}/reopenings",
+    response_model=list[ReopeningRead],
+    summary="Reopenings granted for a closed period",
+    dependencies=[Depends(require(Permission.DATA_READ))],
+)
+def list_reopenings(
+    period_code: str,
+    db: DbSession,
+    principal: CurrentPrincipal,
+    active_only: bool = False,
+) -> list[ReopeningRead]:
+    period = reference.get_period_by_code(db, period_code)
+    state_id = principal.state_id if principal.is_state_scoped else None
+    return [
+        _reopening_read(db, grant)
+        for grant in period_service.reopenings(
+            db, period_id=period.id, state_id=state_id, active_only=active_only
+        )
+    ]
+
+
+@router.post(
+    "/periods/{period_code}/reopenings",
+    response_model=ReopeningRead,
+    status_code=201,
+    summary="Let one state file one more return into a closed period",
+)
+def grant_reopening(
+    period_code: str,
+    payload: ReopeningCreate,
+    db: DbSession,
+    principal=Depends(require(Permission.REFERENCE_MANAGE)),
+) -> ReopeningRead:
+    period = reference.get_period_by_code(db, period_code)
+    state = reference.get_state_by_code(db, payload.state_code)
+    grant = period_service.grant_reopening(
         db,
-        action="reference.period_close",
-        entity_type="reporting_period",
-        entity_id=period.id,
+        period,
+        state,
+        reason=payload.reason,
         actor=principal.user,
-        period_id=period.id,
-        summary=f"Closed reporting period {period.code}.",
+        days=payload.days,
     )
     db.commit()
-    return PeriodRead.model_validate(period)
+    return _reopening_read(db, grant)
+
+
+@router.post(
+    "/reopenings/{reopening_id}/revoke",
+    response_model=ReopeningRead,
+    summary="Withdraw a reopening that has not been used",
+)
+def revoke_reopening(
+    reopening_id: int,
+    payload: ReopeningRevoke,
+    db: DbSession,
+    principal=Depends(require(Permission.REFERENCE_MANAGE)),
+) -> ReopeningRead:
+    grant = period_service.get_reopening(db, reopening_id)
+    period_service.revoke_reopening(db, grant, reason=payload.reason, actor=principal.user)
+    db.commit()
+    return _reopening_read(db, grant)
 
 
 # --------------------------------------------------------------------------

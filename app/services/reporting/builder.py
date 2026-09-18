@@ -789,6 +789,13 @@ def build_report(
             "Period type": period.period_type.replace("_", "-").title(),
             "Window": f"{period.start_date.isoformat()} to {period.end_date.isoformat()}",
             "Submission deadline": period.due_date.isoformat(),
+            "Cycle": (
+                "Open — states may still submit"
+                if period.is_open
+                else "Closed"
+                + (f" on {period.locked_at:%Y-%m-%d}" if period.locked_at else "")
+                + ". Figures change only through an accepted correction."
+            ),
             "Scope": scope_label,
             "Indicators covered": str(len(indicators)),
         },

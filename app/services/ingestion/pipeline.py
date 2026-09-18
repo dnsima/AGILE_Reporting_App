@@ -28,7 +28,7 @@ from app.schemas.ingestion import (
     ManualSubmission,
 )
 from app.schemas.validation import ValidationSummary
-from app.services import audit, queries, reference
+from app.services import audit, periods, queries, reference
 from app.services.ingestion.mapper import MappedValue, map_rows
 from app.services.ingestion.parser import parse_upload
 from app.services.validation import run_validation
@@ -256,6 +256,11 @@ def ingest_upload(
             },
         )
 
+    # A closed cycle takes no new return unless this state holds a reopening.
+    # Checked before the file is stored, so a refused upload leaves nothing on
+    # disk to reconcile later.
+    reopening = periods.assert_can_submit(db, state, period)
+
     version = _next_version(db, state.id, period.id)
     stored_path = _store_file(content, state, period, version, filename)
 
@@ -278,6 +283,9 @@ def ingest_upload(
     )
     db.add(submission)
     db.flush()
+
+    if reopening is not None:
+        periods.consume_reopening(db, reopening, submission)
 
     _supersede_previous(db, state.id, period.id, keep_id=submission.id)
     _persist_values(db, submission, mapping.values)
@@ -388,6 +396,8 @@ def ingest_manual(
             details={"unmatched": unmatched[:20]},
         )
 
+    reopening = periods.assert_can_submit(db, state, period)
+
     version = _next_version(db, state.id, period.id)
     submission = Submission(
         state_id=state.id,
@@ -408,6 +418,9 @@ def ingest_manual(
     )
     db.add(submission)
     db.flush()
+
+    if reopening is not None:
+        periods.consume_reopening(db, reopening, submission)
 
     _supersede_previous(db, state.id, period.id, keep_id=submission.id)
     _persist_values(db, submission, mapped)

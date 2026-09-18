@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     JSON,
     Boolean,
     Date,
+    DateTime,
     Float,
     ForeignKey,
     Index,
@@ -130,6 +131,69 @@ class StateSubcomponent(Base, TimestampMixin):
     subcomponent: Mapped[Subcomponent] = relationship()
 
 
+class PeriodReopening(Base, TimestampMixin):
+    """Permission for one state to submit again into a closed period.
+
+    Reopening a whole period so that one state can re-file lets twenty others
+    change figures nobody asked about, which is the silent overwrite the whole
+    change process exists to prevent. A reopening is therefore granted to a
+    single state, for a stated reason, for one submission, and it expires.
+
+    It is not the route for correcting a figure -- that is the query workflow,
+    which works on a closed period and needs no reopening. This is for the case
+    a correction cannot reach: the wrong file, or a return that was never filed
+    before the cycle closed.
+    """
+
+    __tablename__ = "period_reopenings"
+    __table_args__ = (
+        Index("ix_reopenings_period_state", "period_id", "state_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    period_id: Mapped[int] = mapped_column(
+        ForeignKey("reporting_periods.id"), nullable=False, index=True
+    )
+    state_id: Mapped[int] = mapped_column(ForeignKey("states.id"), nullable=False, index=True)
+    #: Required. A reopening nobody can account for is not a control.
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+
+    granted_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    granted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: After this date the grant lapses whether or not it was used.
+    expires_on: Mapped[date | None] = mapped_column(Date)
+
+    #: Set by the submission that used it; a grant admits one return.
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consumed_submission_id: Mapped[int | None] = mapped_column(
+        ForeignKey("submissions.id", ondelete="SET NULL")
+    )
+
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    revoke_reason: Mapped[str | None] = mapped_column(Text)
+
+    period: Mapped[ReportingPeriod] = relationship(back_populates="reopenings")
+    state: Mapped["State"] = relationship()  # noqa: F821
+
+    def is_active(self, today: date | None = None) -> bool:
+        if self.revoked_at is not None or self.consumed_at is not None:
+            return False
+        if self.expires_on is None:
+            return True
+        return (today or date.today()) <= self.expires_on
+
+    @property
+    def status(self) -> str:
+        if self.revoked_at is not None:
+            return "REVOKED"
+        if self.consumed_at is not None:
+            return "USED"
+        if not self.is_active():
+            return "EXPIRED"
+        return "ACTIVE"
+
+
 class IndicatorLink(Base, TimestampMixin):
     """Lineage between an indicator in one framework revision and the next.
 
@@ -242,10 +306,21 @@ class ReportingPeriod(Base, TimestampMixin):
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     #: Deadline used by the timeliness dimension of the DQA.
     due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    #: False once the NPCU has closed the cycle. A closed period takes no new
+    #: submission unless a state holds a reopening granted for it; corrections
+    #: still land, but only through the query workflow, where they are proposed
+    #: with evidence and approved.
     is_open: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    locked_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    #: Why the cycle was closed, e.g. which report was published from it.
+    lock_note: Mapped[str | None] = mapped_column(Text)
 
     submissions: Mapped[list["Submission"]] = relationship(back_populates="period")
     targets: Mapped[list["Target"]] = relationship(back_populates="period")
+    reopenings: Mapped[list["PeriodReopening"]] = relationship(
+        back_populates="period", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<ReportingPeriod {self.code}>"

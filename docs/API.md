@@ -102,6 +102,66 @@ Targets carry a second meaning: where a state has targets for a period, those
 indicators are what that state is *obliged* to report, and the completeness
 dimension is measured against them.
 
+## Reporting cycles
+
+A period closes when the NPCU has consolidated it and published from it. After
+that, a state must not be able to change published figures by uploading a new
+file — that is exactly the silent overwrite the change process exists to
+prevent.
+
+| Method | Path | Permission |
+|---|---|---|
+| `POST` | `/reference/periods/{code}/close` | `reference:manage` |
+| `POST` | `/reference/periods/{code}/reopen` | `reference:manage` — every state |
+| `GET` | `/reference/periods/{code}/reopenings` | `data:read` — state-scoped |
+| `POST` | `/reference/periods/{code}/reopenings` | `reference:manage` — one state |
+| `POST` | `/reopenings/{id}/revoke` | `reference:manage` |
+
+### Closing is not freezing
+
+Two routes still reach a closed period, and the difference between them is the
+whole design:
+
+* **Correcting a figure** goes through the query workflow, unchanged. The state
+  proposes a correction with evidence, the NPCU accepts it, the original is kept
+  and the restatement is reported. A closed period needs no special permission
+  for this, because the permission *is* the acceptance.
+* **Re-filing a return** — the wrong file was uploaded, or a return was never
+  filed before the cycle closed — is what a correction cannot reach, and it
+  needs a reopening.
+
+The refusal says so, rather than being a wall:
+
+```
+2026-Q1 is closed, so it takes no new submission from Kebbi. Kebbi's last
+reopening for this period was used. To correct a figure, respond to its query
+with evidence -- that works on a closed period and keeps the original on
+record. To re-file the return itself, ask the NPCU to grant a reopening for
+Kebbi.
+```
+
+### Reopenings are per state
+
+Reopening a whole period so that one state can re-file lets twenty others change
+figures nobody asked about. A reopening is therefore granted to **one named
+state**, for a **stated reason** (required — a reopening nobody can account for
+is not a control), good for **one submission**, and it **expires** (14 days by
+default). Its status is `ACTIVE`, `USED`, `EXPIRED` or `REVOKED`; a used grant
+cannot be withdrawn, and a state cannot hold two active grants for one period.
+
+`POST /reference/periods/{code}/reopen` exists for a cycle closed in error or
+genuinely resumed. It is blunt on purpose.
+
+### Where the gate sits
+
+`periods.assert_can_submit` runs in the ingestion pipeline before the file is
+stored, so a refused upload leaves nothing on disk to reconcile later. It covers
+both the multipart upload and the JSON submission endpoint. `PeriodRead` carries
+`locked_at`, `lock_note` and `reopened_for` (the states currently holding an
+unused grant), so the dashboard can say what is closed and who may still file.
+The report's metadata states whether the cycle was open or closed when it was
+generated.
+
 ## Data queries
 
 A validation finding is not a wall the submission hits. It becomes a query

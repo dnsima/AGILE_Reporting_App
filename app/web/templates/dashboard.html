@@ -225,6 +225,7 @@
               <textarea id="upload-notes" rows="2" placeholder="Optional context for reviewers"></textarea>
             </label>
             <label class="inline"><input type="checkbox" id="upload-approve"> Approve immediately if it passes validation</label>
+            <div id="period-lock" class="lock-banner" hidden></div>
             <div class="row">
               <button class="btn primary" type="submit" id="upload-btn">Ingest</button>
               <button class="btn ghost" type="button" id="template-btn">Download template</button>
@@ -236,6 +237,27 @@
           <div id="upload-result" class="muted">No upload yet in this session.</div>
         </article>
       </div>
+      <article class="panel" id="cycle-panel" hidden>
+        <header>
+          <h2>Reporting cycle</h2>
+          <span class="hint" id="cycle-caption"></span>
+        </header>
+        <div class="row cycle-actions">
+          <label>Note / reason
+            <input type="text" id="cycle-note" placeholder="e.g. Q2 report published to the Bank">
+          </label>
+          <button class="btn primary" type="button" id="cycle-close-btn">Close the cycle</button>
+          <button class="btn ghost" type="button" id="cycle-reopen-btn">Reopen for everyone</button>
+        </div>
+        <div class="row cycle-actions" id="grant-row">
+          <label>Let one state file again
+            <select id="grant-state"></select>
+          </label>
+          <button class="btn ghost" type="button" id="grant-btn">Grant a reopening</button>
+        </div>
+        <div class="table-scroll" id="reopenings-table"></div>
+      </article>
+
       <article class="panel">
         <header><h2>Recent submissions</h2></header>
         <div class="table-scroll" id="submissions-table"></div>

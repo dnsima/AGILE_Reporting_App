@@ -340,3 +340,19 @@ tr.query-row.overdue td.due { color: var(--bad); font-weight: 700; }
 .query-actions legend { font-size: .78rem; font-weight: 700; color: var(--brand); padding: 0 6px; }
 .query-closed { background: var(--ok-bg); color: var(--ok); border-radius: 8px;
   padding: 10px 13px; font-size: .84rem; font-weight: 600; }
+
+/* --- Reporting cycle lock --------------------------------------------------
+   A closed cycle is not a dead end, so the banner says what still works. */
+.lock-banner { border-radius: 8px; padding: 10px 13px; font-size: .8rem; line-height: 1.45; }
+.lock-banner.closed { background: var(--warn-bg); color: var(--warn); }
+.lock-banner.granted { background: var(--info-bg); color: var(--info); }
+.lock-banner strong { display: block; margin-bottom: 3px; }
+.cycle-actions { align-items: flex-end; margin-bottom: 12px; }
+.cycle-actions label { display: flex; flex-direction: column; gap: 4px; font-size: .78rem;
+  font-weight: 600; color: var(--text-muted); flex: 1 1 260px; }
+.cycle-actions input[type=text], .cycle-actions select { background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; color: var(--text);
+  font: inherit; font-size: .84rem; font-weight: 400; }
+.badge.active { background: var(--ok-bg); color: var(--ok); }
+.badge.used { background: var(--info-bg); color: var(--info); }
+.badge.expired, .badge.revoked { background: var(--surface-2); color: var(--text-muted); }

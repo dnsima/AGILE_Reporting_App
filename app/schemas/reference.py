@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -109,6 +109,50 @@ class PeriodRead(ORMModel):
     end_date: date
     due_date: date
     is_open: bool
+    locked_at: datetime | None = None
+    lock_note: str | None = None
+    #: States currently holding an unused reopening for this period.
+    reopened_for: list[str] = Field(default_factory=list)
+
+
+class ReopeningRead(ORMModel):
+    """One state's permission to file again into a closed period."""
+
+    id: int
+    period_id: int
+    period_code: str | None = None
+    state_id: int
+    state_code: str | None = None
+    state_name: str | None = None
+    reason: str
+    status: str
+    granted_by: str | None = None
+    granted_at: datetime | None = None
+    expires_on: date | None = None
+    consumed_at: datetime | None = None
+    consumed_submission_id: int | None = None
+    revoked_at: datetime | None = None
+    revoke_reason: str | None = None
+
+
+class PeriodCloseRequest(BaseModel):
+    #: What was published from the cycle, so the close can be accounted for.
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class PeriodReopenRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class ReopeningCreate(BaseModel):
+    state_code: str
+    reason: str = Field(min_length=1, max_length=1000)
+    #: Days the grant stands before it lapses unused.
+    days: int = Field(default=14, ge=1, le=120)
+
+
+class ReopeningRevoke(BaseModel):
+    reason: str = Field(min_length=1, max_length=1000)
 
 
 class PeriodCreate(BaseModel):
