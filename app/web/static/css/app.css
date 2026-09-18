@@ -139,11 +139,15 @@ tbody tr:hover { background: var(--surface-2); }
 .table-scroll { max-height: 560px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
 
 .badge { display: inline-block; padding: 1px 8px; border-radius: 11px; font-size: .72rem; font-weight: 700; }
-.badge.on-track, .badge.excellent, .badge.good, .badge.approved { background: var(--ok-bg); color: var(--ok); }
+.badge.on-track, .badge.excellent, .badge.good, .badge.approved,
+.badge.matched { background: var(--ok-bg); color: var(--ok); }
 .badge.progressing, .badge.fair, .badge.validated { background: var(--info-bg); color: var(--info); }
-.badge.lagging, .badge.weak, .badge.uploaded { background: var(--warn-bg); color: var(--warn); }
-.badge.off-track, .badge.poor, .badge.rejected, .badge.error { background: var(--bad-bg); color: var(--bad); }
-.badge.no-data, .badge.no-target, .badge.not-submitted { background: var(--surface-2); color: var(--text-muted); }
+.badge.lagging, .badge.weak, .badge.uploaded,
+.badge.framework-missing, .badge.tracker-missing { background: var(--warn-bg); color: var(--warn); }
+.badge.off-track, .badge.poor, .badge.rejected, .badge.error,
+.badge.mismatch { background: var(--bad-bg); color: var(--bad); }
+.badge.no-data, .badge.no-target, .badge.not-submitted,
+.badge.incomplete { background: var(--surface-2); color: var(--text-muted); }
 
 /* --------------------------------------------------------------- forms --- */
 .stack { display: flex; flex-direction: column; gap: 10px; }

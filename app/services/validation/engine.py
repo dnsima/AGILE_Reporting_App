@@ -50,7 +50,7 @@ from app.schemas.validation import (
     ValidationIssueRead,
     ValidationSummary,
 )
-from app.services import reference
+from app.services import reconciliation, reference
 from app.services.validation.rules import (
     RULE_REGISTRY,
     SEVERITY_PENALTY,
@@ -194,6 +194,28 @@ def _national_context(
     return totals, counts
 
 
+def _tracker_reconciliation(
+    db: Session, submission: Submission, indicators: list[Indicator]
+) -> tuple[list, bool]:
+    """Reconcile this submission against the finer returns inside its period.
+
+    Returns nothing at all unless the state has actually filed at least one of
+    those finer returns. States are not yet reporting the monthly tracker, and
+    a rule that fires 53 times the moment a quarterly return arrives -- because
+    a stream nobody has started is empty -- would bury the real findings. The
+    checks switch themselves on, state by state, as tracker reporting starts.
+    """
+    period = submission.period
+    if period is None or reconciliation.finer_grain(period.period_type) is None:
+        return [], False
+    result = reconciliation.reconcile_state(
+        db, submission.state, period, indicators=indicators
+    )
+    if not result.fine_submission_ids:
+        return [], False
+    return result.lines, result.is_complete
+
+
 def _approved_history(
     db: Session, submission: Submission, depth: int = HISTORY_DEPTH
 ) -> list[Submission]:
@@ -313,6 +335,7 @@ def build_context(db: Session, submission: Submission) -> RuleContext:
 
     applicable = _applicable_indicator_ids(db, submission, indicators)
     national_totals, national_counts = _national_context(db, submission)
+    reconciled, tracker_complete = _tracker_reconciliation(db, submission, indicators)
 
     return RuleContext(
         submission=submission,
@@ -330,6 +353,8 @@ def build_context(db: Session, submission: Submission) -> RuleContext:
         national_totals=national_totals,
         national_state_counts=national_counts,
         previous_is_provisional=previous_is_provisional,
+        reconciliation=reconciled,
+        reconciliation_is_complete=tracker_complete,
     )
 
 

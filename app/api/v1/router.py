@@ -11,6 +11,7 @@ from app.api.v1 import (
     health,
     ingestion,
     quality,
+    reconciliation,
     reference,
     reports,
 )
@@ -21,6 +22,7 @@ api_router.include_router(auth.router)
 api_router.include_router(reference.router)
 api_router.include_router(ingestion.router)
 api_router.include_router(quality.router)
+api_router.include_router(reconciliation.router)
 api_router.include_router(analytics.router)
 api_router.include_router(cohorts.router)
 api_router.include_router(dashboard.router)

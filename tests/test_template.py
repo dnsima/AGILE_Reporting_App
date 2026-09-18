@@ -392,3 +392,37 @@ def test_endpoint_defaults_to_the_latest_quarter(client, npcu_headers):
     response = client.get("/api/v1/ingestion/template?state=KD", headers=npcu_headers)
     assert response.status_code == 200, response.text
     assert "AGILE_results_framework_KD_" in response.headers["content-disposition"]
+
+
+# --------------------------------------------------------------------------
+# The two streams agree on what a figure means
+# --------------------------------------------------------------------------
+def test_the_template_and_the_reconciliation_read_a_figure_the_same_way(db, kano, period):
+    """A template that says "snapshot" while reconciliation sums is a trap."""
+    from app.core.enums import TimeBasis
+    from app.services import reconciliation
+
+    workbook = load_workbook(io.BytesIO(build_reporting_template(db, kano, period)))
+    rows = list(workbook["Indicator reference"].iter_rows(values_only=True))
+    headers = list(rows[0])
+    basis_col = headers.index("Basis")
+    rollup_col = headers.index("Monthly rolls up as")
+
+    catalogue = {row.code: row for row in db.query(Indicator)}
+    for row in rows[1:]:
+        indicator = catalogue[row[0]]
+        sums = reconciliation.time_basis(indicator) is TimeBasis.SUM
+        assert sums is ("added together" in row[rollup_col])
+        # The instruction the state reads must not contradict the arithmetic.
+        assert sums is ("this period only" in row[basis_col])
+
+
+def test_a_flow_indicator_is_told_not_to_carry_figures_forward(db):
+    from app.core.enums import TimeBasis
+
+    indicator = db.query(Indicator).order_by(Indicator.number).first()
+    indicator.is_cumulative = False
+    indicator.time_basis = str(TimeBasis.SUM)
+    assert reporting_basis(indicator) == (
+        "Count for this period only. Do not carry anything forward from earlier periods."
+    )

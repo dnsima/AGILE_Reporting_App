@@ -182,6 +182,14 @@ class Indicator(Base, TimestampMixin):
     )
     direction: Mapped[str] = mapped_column(String(16), default=Direction.INCREASE, nullable=False)
     is_cumulative: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    #: How months roll up into a quarter for this indicator, when the default
+    #: reading is wrong. NULL means "derive it" (see
+    #: :func:`app.services.reconciliation.time_basis`), which reads a count as
+    #: a position at the period's end. Set this to SUM only for a genuine
+    #: within-period flow -- something counted afresh each month, like
+    #: grievances received -- because that is the one case where the months
+    #: legitimately add up.
+    time_basis: Mapped[str | None] = mapped_column(String(16))
     requires_numerator_denominator: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )

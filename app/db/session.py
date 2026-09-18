@@ -10,12 +10,15 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
+from app.core.logging_config import get_logger
 from app.db.base import Base
+
+logger = get_logger(__name__)
 
 
 def _build_engine() -> Engine:
@@ -74,8 +77,68 @@ def session_scope() -> Generator[Session, None, None]:
         db.close()
 
 
+def _literal(value: object) -> str | None:
+    """Render a scalar column default as SQL, or None if it is not one."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        escaped = value.replace("'", "''")
+        return f"'{escaped}'"
+    return None
+
+
+def add_missing_columns() -> list[str]:
+    """Add columns the models declare but an existing table does not have.
+
+    ``create_all`` creates missing *tables* and silently ignores missing
+    *columns*, so a schema change lands as "no such column" against a database
+    that already holds data -- which, for this project, is the one the NPCU has
+    been loading real returns into. There is no migration tool here, so this
+    does the one safe thing a schema change needs: add. It never drops,
+    renames or retypes anything, and it skips any column it cannot add without
+    guessing a value for the rows already there.
+    """
+    from app import models  # noqa: F401  (registers mappers, so the metadata is whole)
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    added: list[str] = []
+
+    for table in Base.metadata.sorted_tables:
+        if table.name not in tables:
+            continue  # create_all will build it in full
+        present = {column["name"] for column in inspector.get_columns(table.name)}
+        for column in table.columns:
+            if column.name in present:
+                continue
+
+            clause = f"{column.name} {column.type.compile(engine.dialect)}"
+            if not column.nullable:
+                default = getattr(column.default, "arg", None)
+                rendered = _literal(default) if default is not None else None
+                if rendered is None:
+                    logger.warning(
+                        "cannot add a NOT NULL column without a scalar default",
+                        extra={"table": table.name, "column_name": column.name},
+                    )
+                    continue
+                clause += f" NOT NULL DEFAULT {rendered}"
+
+            with engine.begin() as connection:
+                connection.execute(text(f"ALTER TABLE {table.name} ADD COLUMN {clause}"))
+            added.append(f"{table.name}.{column.name}")
+
+    if added:
+        logger.info("added missing columns", extra={"columns": added})
+    return added
+
+
 def init_db() -> None:
-    """Create any missing tables. Import models first so they register."""
+    """Create any missing tables and columns. Import models first so they register."""
     from app import models  # noqa: F401  (registers mappers)
 
     Base.metadata.create_all(bind=engine)
+    add_missing_columns()
+

@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.enums import SubmissionStatus
+from app.core.enums import PeriodType, SubmissionStatus
 from app.core.errors import ConflictError, IngestionError, ValidationError
 from app.core.events import event_bus
 from app.core.logging_config import get_logger
@@ -119,7 +119,64 @@ def _finalise(
         submission.approved_by_id = getattr(actor, "id", None)
         submission.approved_at = datetime.now(timezone.utc)
     db.flush()
+
+    _revalidate_enclosing(db, submission, actor, raise_queries=raise_queries)
     return summary
+
+
+def _revalidate_enclosing(
+    db: Session,
+    submission: Submission,
+    actor: User | None,
+    *,
+    raise_queries: bool = True,
+) -> Submission | None:
+    """Re-check the coarser return this one feeds, now that this figure is in.
+
+    A quarterly return is usually filed before the third month of its tracker,
+    so reconciling it at the moment it arrives sees an incomplete tracker and
+    reaches no verdict. The verdict becomes available when the last month
+    lands -- which is this submission -- so the quarter is re-checked then
+    rather than waiting for someone to notice.
+    """
+    period = submission.period
+    if period is None:
+        return None
+
+    enclosing = db.scalar(
+        select(ReportingPeriod).where(
+            ReportingPeriod.period_type == str(PeriodType.QUARTERLY),
+            ReportingPeriod.start_date <= period.start_date,
+            ReportingPeriod.end_date >= period.end_date,
+            ReportingPeriod.id != period.id,
+        )
+    )
+    if enclosing is None:
+        return None
+
+    coarser = db.scalar(
+        select(Submission).where(
+            Submission.state_id == submission.state_id,
+            Submission.period_id == enclosing.id,
+            Submission.is_current.is_(True),
+        )
+    )
+    if coarser is None:
+        return None
+
+    run_validation(db, coarser)
+    if raise_queries:
+        queries.raise_queries(db, coarser, actor=actor)
+    db.flush()
+    logger.info(
+        "re-checked the enclosing period against the tracker",
+        extra={
+            "submission_id": submission.id,
+            "enclosing_submission_id": coarser.id,
+            "period": enclosing.code,
+        },
+    )
+    return coarser
 
 
 def _diagnostics_dict(diagnostics: IngestionDiagnostics) -> dict:

@@ -147,6 +147,59 @@ class AggregationMethod(StrEnum):
     COUNT_YES = "COUNT_YES"
 
 
+class TimeBasis(StrEnum):
+    """How one period's figure is built from the finer periods inside it.
+
+    This is a different axis from :class:`AggregationMethod`, which says how
+    states combine into a national figure. A quarter is built from its months
+    along the *time* axis, and the two answers differ: "girls enrolled" sums
+    across states but does **not** sum across months, because each month's
+    tracker figure is already a running total.
+
+    Getting this wrong in either direction is a real reporting failure -- a
+    quarter triple-counted, or a genuine three-month total read as a snapshot.
+    """
+
+    #: A running total. The period equals its last constituent period.
+    SNAPSHOT = "SNAPSHOT"
+    #: A count of what happened within the period. The parts add up.
+    SUM = "SUM"
+    #: The most recent answer, e.g. a Yes/No status.
+    LATEST = "LATEST"
+    MAX = "MAX"
+    MIN = "MIN"
+
+
+#: Bases whose verdict needs every constituent period. A partial sum is always
+#: below the whole, so judging one before the months are all in manufactures a
+#: discrepancy; a snapshot, by contrast, is answered by the final period alone.
+TIME_BASES_NEEDING_EVERY_PART = {TimeBasis.SUM, TimeBasis.MAX, TimeBasis.MIN}
+
+#: Units that carry a rate rather than a count, and so tolerate rounding.
+RATE_UNITS = {IndicatorUnit.PERCENT, IndicatorUnit.RATIO, IndicatorUnit.SCORE}
+
+
+class ReconciliationStatus(StrEnum):
+    """Verdict on one indicator across two reporting streams."""
+
+    MATCHED = "MATCHED"
+    MISMATCH = "MISMATCH"
+    #: The coarser stream reported it; the finer one never did.
+    TRACKER_MISSING = "TRACKER_MISSING"
+    #: The finer stream reported it; the coarser one left it out.
+    FRAMEWORK_MISSING = "FRAMEWORK_MISSING"
+    #: Not enough of the finer periods are in to reach a verdict yet.
+    INCOMPLETE = "INCOMPLETE"
+
+
+#: Statuses that are somebody's work.
+UNRECONCILED_STATUSES = {
+    ReconciliationStatus.MISMATCH,
+    ReconciliationStatus.TRACKER_MISSING,
+    ReconciliationStatus.FRAMEWORK_MISSING,
+}
+
+
 class Direction(StrEnum):
     """Whether a higher or a lower value is better for an indicator."""
 

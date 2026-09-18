@@ -102,6 +102,70 @@ Targets carry a second meaning: where a state has targets for a period, those
 indicators are what that state is *obliged* to report, and the completeness
 dimension is measured against them.
 
+## Reconciliation
+
+States report the same 53 indicators twice: monthly through the performance
+tracker and quarterly through the results framework. The two must agree.
+
+| Method | Path | Permission |
+|---|---|---|
+| `GET` | `/reconciliation` | `data:read` — every state for one period |
+| `GET` | `/reconciliation/{state_code}` | `data:read` — one state, state-scoped |
+
+Reconciling is not a subtraction, because a quarter is not built from its months
+the same way for every indicator. Each one is folded on its own **time basis**:
+
+| Basis | The quarter is | Needs |
+|---|---|---|
+| `SNAPSHOT` | its last reported month | only the final month |
+| `LATEST` | the most recent Yes/No answer | only the final month |
+| `SUM` | its months added together | every month |
+| `MAX` / `MIN` | the highest / lowest month | every month |
+
+This is a different axis from `aggregation_method`, which combines *states* into
+a national figure. "Girls enrolled" sums across states but does **not** sum
+across months, because each month's tracker figure is already a position.
+
+The basis is derived from the catalogue, and the derivation defaults to
+`SNAPSHOT`. `is_cumulative` being false means "not a running total since
+inception", not "a within-period flow" — fourteen of the 53 are marked that
+way, and reading them as sums would tell every state its quarterly enrolment
+should equal April + May + June. A wrong `SNAPSHOT` misses a discrepancy; a
+wrong `SUM` manufactures hundreds. So `SUM` is opt-in through the indicator's
+`time_basis` column (blank in `seeds/indicators.csv` — nothing in the current
+framework is a flow), and the reporting template prints the same answer in its
+*Monthly rolls up as* column so the two halves cannot drift apart.
+
+### Verdicts
+
+| Status | Meaning |
+|---|---|
+| `MATCHED` | The streams agree, within tolerance |
+| `MISMATCH` | Both figures present and they disagree |
+| `TRACKER_MISSING` | Reported for the quarter, absent from a complete tracker |
+| `FRAMEWORK_MISSING` | Reported monthly, left out of the quarterly return |
+| `INCOMPLETE` | Not enough months are in to reach a verdict |
+
+Counts must agree exactly; rates tolerate 0.1 percentage points for rounding.
+A state that has filed **no** tracker return produces no lines at all: 53 rows
+of "missing from the tracker" would be true and useless, and would make the
+national agreement figure a statement about who has started rather than about
+whether figures agree. `states_tracking` is the denominator that agreement is
+measured over.
+
+### Queries
+
+Three rules turn a failed reconciliation into the ordinary query workflow:
+`REC-001` (the figures disagree), `REC-002` (reported monthly, missing from the
+quarter) and `REC-003` (reported quarterly, absent from a complete tracker).
+All three are warnings, not blocks — the figure stays, and changes only through
+the change-management process — and all three stay silent until the state has
+actually filed a tracker return.
+
+A quarterly return is usually filed before the third month of its tracker, so
+the verdict is not available when it arrives. Ingesting a monthly return
+re-checks the quarter that encloses it, which is when the verdict appears.
+
 ## Ingestion
 
 | Method | Path | Permission |

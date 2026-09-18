@@ -80,6 +80,13 @@ COMPOSITES: dict[str, list[str]] = {
     "C2.0-01": ["C2.1-01", "C2.1-02"],
 }
 
+#: Indicators whose months genuinely add up into the quarter, by new code.
+#: Empty on purpose. The framework's own `Type` column offers only "Current"
+#: and "Cumulative" -- a count as at now, or a running total since inception --
+#: and both are positions, read at the period's end. Neither adds across
+#: months. A within-period flow would go here, and nothing in the 53 is one.
+TIME_BASIS: dict[str, str] = {}
+
 #: The results framework's `Type` column drives every downstream calculation.
 TYPE_MAP = {
     "Current (No.)": ("NUMBER", "SUM", 0),
@@ -162,7 +169,7 @@ def main() -> None:
         writer = csv.writer(handle)
         writer.writerow([
             "code", "legacy_code", "number", "name", "component", "subcomponent",
-            "unit", "aggregation_method", "direction", "is_cumulative",
+            "unit", "aggregation_method", "direction", "is_cumulative", "time_basis",
             "is_composite", "composite_of", "is_reported", "aliases",
         ])
         for number, (component, old, name, type_label) in enumerate(catalogue, start=1):
@@ -172,6 +179,10 @@ def main() -> None:
             writer.writerow([
                 new, old, number, name, component, subcomponent,
                 unit, aggregation, "INCREASE", cumulative,
+                # Left blank: nothing in this framework is a within-period
+                # flow, so every figure reconciles as a position at the
+                # period's end. Set a cell to SUM if one ever is.
+                TIME_BASIS.get(new, ""),
                 1 if parts else 0, "|".join(parts),
                 0 if new == "C2.0-01" else 1,   # the derived row is computed, not collected
                 old,                             # old code stays an alias for old files

@@ -31,7 +31,13 @@ from openpyxl.utils import get_column_letter
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.enums import AggregationMethod, IndicatorUnit, PeriodType, TargetStatus
+from app.core.enums import (
+    AggregationMethod,
+    IndicatorUnit,
+    PeriodType,
+    TargetStatus,
+    TimeBasis,
+)
 from app.models import (
     Indicator,
     ReportingPeriod,
@@ -40,7 +46,7 @@ from app.models import (
     Submission,
     Target,
 )
-from app.services import reference
+from app.services import reconciliation, reference
 
 HEADER_FILL = PatternFill("solid", fgColor="0F3D61")
 BANNER_FILL = PatternFill("solid", fgColor="DCE6F1")
@@ -72,6 +78,8 @@ def reporting_basis(indicator: Indicator, parts: list[str] | None = None) -> str
         return f"Cumulative total to date. Must equal {' + '.join(components)}."
     if indicator.unit == IndicatorUnit.PERCENT:
         return "Rate at the end of this period, between 0 and 100. Do not enter a count."
+    if reconciliation.time_basis(indicator) is TimeBasis.SUM:
+        return "Count for this period only. Do not carry anything forward from earlier periods."
     if indicator.is_cumulative:
         return "Cumulative total to date, including everything reported in earlier periods."
     return "Value as at the end of this period. A snapshot, not a running total."
@@ -373,7 +381,7 @@ def _add_reference(workbook: Workbook, indicators: list[Indicator]) -> None:
     sheet = workbook.create_sheet("Indicator reference")
     sheet.append(
         ["Code", "Previous code", "Sub-component", "Indicator", "Unit", "Basis",
-         "National aggregation"]
+         "Monthly rolls up as", "National aggregation"]
     )
     for cell in sheet[1]:
         cell.font = Font(bold=True, color="FFFFFF")
@@ -386,6 +394,15 @@ def _add_reference(workbook: Workbook, indicators: list[Indicator]) -> None:
         AggregationMethod.WEIGHTED_AVERAGE: "Weighted by numerator and denominator",
         AggregationMethod.AVERAGE: "Unweighted average",
     }
+    # How the monthly tracker rolls up into the quarter. Stated here because
+    # the two streams have to agree, and the reconciliation uses exactly this.
+    rollup = {
+        TimeBasis.SNAPSHOT: "The quarter equals the last month reported",
+        TimeBasis.LATEST: "The quarter is the most recent answer",
+        TimeBasis.SUM: "The quarter is the three months added together",
+        TimeBasis.MAX: "The quarter is the highest month",
+        TimeBasis.MIN: "The quarter is the lowest month",
+    }
     for indicator in indicators:
         sheet.append([
             indicator.code,
@@ -394,9 +411,10 @@ def _add_reference(workbook: Workbook, indicators: list[Indicator]) -> None:
             indicator.name,
             _unit_label(indicator),
             reporting_basis(indicator),
+            rollup[reconciliation.time_basis(indicator)],
             aggregation.get(
                 AggregationMethod(indicator.aggregation_method), indicator.aggregation_method
             ),
         ])
-    for column, width in zip("ABCDEFG", [12, 13, 14, 56, 10, 52, 38], strict=True):
+    for column, width in zip("ABCDEFGH", [12, 13, 14, 56, 10, 52, 42, 38], strict=True):
         sheet.column_dimensions[column].width = width

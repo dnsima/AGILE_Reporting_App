@@ -1,55 +1,55 @@
-code,legacy_code,number,name,component,subcomponent,unit,aggregation_method,direction,is_cumulative,is_composite,composite_of,is_reported,aliases
-PDO-01,PDO-01,1,Students enrolled in public schools benefiting from direct interventions to enhance learning,PDO,PDO,NUMBER,SUM,INCREASE,0,0,,1,PDO-01
-PDO-02,PDO-02,2,Boys benefiting from direct interventions to enhance learning (JSS-SSS),PDO,PDO,NUMBER,SUM,INCREASE,0,0,,1,PDO-02
-PDO-03,PDO-03,3,Girls benefiting from direct interventions to enhance learning (JSS-SSS),PDO,PDO,NUMBER,SUM,INCREASE,0,0,,1,PDO-03
-PDO-04,PDO-04,4,Girls currently enrolled in public schools (JS1-SS3) in participating states,PDO,PDO,NUMBER,SUM,INCREASE,0,0,,1,PDO-04
-PDO-05,PDO-05,5,Girls currently enrolled in JS1–JS3 in participating states,PDO,PDO,NUMBER,SUM,INCREASE,0,0,,1,PDO-05
-PDO-06,PDO-06,6,Girls currently enrolled in SS1–SS3 in participating states,PDO,PDO,NUMBER,SUM,INCREASE,0,0,,1,PDO-06
-PDO-07,PDO-07,7,Girls completion rate in participating states,PDO,PDO,PERCENT,AVERAGE_NONZERO,INCREASE,0,0,,1,PDO-07
-PDO-08,PDO-08,8,Girls completion rate JS3,PDO,PDO,PERCENT,AVERAGE_NONZERO,INCREASE,0,0,,1,PDO-08
-PDO-09,PDO-09,9,Girls completion rate SS3,PDO,PDO,PERCENT,AVERAGE_NONZERO,INCREASE,0,0,,1,PDO-09
-PDO-10,PDO-10,10,Public schools in the state (JSS and SSS),PDO,PDO,NUMBER,SUM,INCREASE,0,0,,1,PDO-10
-PDO-11,PDO-11,11,JS schools in the state,PDO,PDO,NUMBER,SUM,INCREASE,0,0,,1,PDO-11
-PDO-12,PDO-12,12,SS schools in the state,PDO,PDO,NUMBER,SUM,INCREASE,0,0,,1,PDO-12
-PDO-13,PDO-13,13,Girls attempting Junior WAEC or BECE,PDO,PDO,NUMBER,SUM,INCREASE,0,0,,1,PDO-13
-PDO-14,PDO-14,14,Girls passing Junior WAEC or BECE,PDO,PDO,NUMBER,SUM,INCREASE,0,0,,1,PDO-14
-PDO-15,PDO-15,15,Girls attempting Senior WAEC or NECO,PDO,PDO,NUMBER,SUM,INCREASE,0,0,,1,PDO-15
-PDO-16,PDO-16,16,Girls passing Senior WAEC or NECO,PDO,PDO,NUMBER,SUM,INCREASE,0,0,,1,PDO-16
-C1.0-01,C1-01,17,Constructed or Rehabilitated JSS classrooms,C1,C1,NUMBER,SUM,INCREASE,1,1,C1.1-01|C1.2-01|C1.2-02,1,C1-01
-C1.1-01,C1-02,18,Classrooms constructed in new JSS,C1,C1.1,NUMBER,SUM,INCREASE,1,0,,1,C1-02
-C1.2-01,C1-03,19,Constructed classrooms in existing JSS,C1,C1.2,NUMBER,SUM,INCREASE,1,0,,1,C1-03
-C1.2-02,C1-04,20,Rehabilitated classrooms in existing JSS,C1,C1.2,NUMBER,SUM,INCREASE,1,0,,1,C1-04
-C1.0-02,C1-05,21,Constructed or Rehabilitated SSS classrooms,C1,C1,NUMBER,SUM,INCREASE,1,1,C1.1-02|C1.2-03|C1.2-04,1,C1-05
-C1.1-02,C1-06,22,Classrooms constructed in new SSS,C1,C1.1,NUMBER,SUM,INCREASE,1,0,,1,C1-06
-C1.2-03,C1-07,23,Constructed classrooms in existing SSS,C1,C1.2,NUMBER,SUM,INCREASE,1,0,,1,C1-07
-C1.2-04,C1-08,24,Rehabilitated classrooms in existing SSS,C1,C1.2,NUMBER,SUM,INCREASE,1,0,,1,C1-08
-C1.2-05,C1-09,25,Public JSS and SSS schools receiving SIG,C1,C1.2,NUMBER,SUM,INCREASE,1,0,,1,C1-09
-C1.0-03,C1-10,26,Constructed_rehabilitated toilets with WASH facilities for JSS_SSS Sch,C1,C1,NUMBER,SUM,INCREASE,1,0,,1,C1-10
-C1.0-04,C1-11,27,Constructed girls toilets with WASH facilities for JSS_SSS Sch,C1,C1,NUMBER,SUM,INCREASE,1,0,,1,C1-11
-C1.0-05,C1-12,28,Schools with both teachers codes of conduct & GBV/SEA (WSA) awareness mechanisms,C1,C1,NUMBER,SUM,INCREASE,1,0,,1,C1-12
-C1.0-06,C1-13,29,Targeted schools that are implementing the whole school approach,C1,C1,NUMBER,SUM,INCREASE,1,0,,1,C1-13
-C2.1-01,C2-01,30,Community members reached at local level on girls’ education (through direct activity),C2,C2.1,NUMBER,SUM,INCREASE,1,0,,1,C2-01
-C2.1-02,C2-02,31,Community members reached at local level on girls’ education (through media),C2,C2.1,NUMBER,SUM,INCREASE,1,0,,1,C2-02
-C2.0-01,C2-01+02,32,Community members reached at local level on girls’ education — all channels (C2-01 + C2-02),C2,C2.1,NUMBER,SUM,INCREASE,1,1,C2.1-01|C2.1-02,0,C2-01+02
-C2.1-03,C2-03,33,Has the state design & implemented the media outreach program?,C2,C2.1,BOOLEAN,COUNT_YES,INCREASE,0,0,,1,C2-03
-C2.2a-01,C2-04,34,Students participating in life skills program (safe space sessions for adolescent girls),C2,C2.2a,NUMBER,SUM,INCREASE,1,0,,1,C2-04
-C2.2a-02,C2-05,35,Girls completing life skills program,C2,C2.2a,NUMBER,SUM,INCREASE,1,0,,1,C2-05
-C2.2b-01,C2-06,36,Schools running the digital literacy program,C2,C2.2b,NUMBER,SUM,INCREASE,0,0,,1,C2-06
-C2.2b-02,C2-07,37,Teachers trained in digital literacy,C2,C2.2b,NUMBER,SUM,INCREASE,1,0,,1,C2-07
-C2.2b-03,C2-08,38,Students participating in digital skills literacy,C2,C2.2b,NUMBER,SUM,INCREASE,1,0,,1,C2-08
-C2.2b-04,C2-09,39,Girls participating in digital skills literacy,C2,C2.2b,NUMBER,SUM,INCREASE,1,0,,1,C2-09
-C2.2b-05,C2-10,40,Girls trained who demonstrate digital literacy,C2,C2.2b,NUMBER,SUM,INCREASE,1,0,,1,C2-10
-C2.2c-01,C2-11,41,Out-of-school girls benefiting from non-formal education (2nd chance),C2,C2.2c,NUMBER,SUM,INCREASE,1,0,,1,C2-11
-C2.3-01,C2-12,42,Scholarship program operational in the state?,C2,C2.3,BOOLEAN,COUNT_YES,INCREASE,0,0,,1,C2-12
-C2.3-02,C2-13,43,Eligible girls receiving scholarship for transition P6 to JSS1,C2,C2.3,NUMBER,SUM,INCREASE,1,0,,1,C2-13
-C2.3-03,C2-14,44,Eligible girls receiving scholarship for staying JSS2_JSS3,C2,C2.3,NUMBER,SUM,INCREASE,1,0,,1,C2-14
-C2.3-04,C2-15,45,Eligible girls receiving scholarship for transition from JSS3 to SS1,C2,C2.3,NUMBER,SUM,INCREASE,1,0,,1,C2-15
-C2.3-05,C2-16,46,Eligible girls receiving scholarship for staying SS2_SS3,C2,C2.3,NUMBER,SUM,INCREASE,1,0,,1,C2-16
-C2.3-06,C2-17,47,Total social safety net beneficiaries,C2,C2.3,NUMBER,SUM,INCREASE,1,0,,1,C2-17
-C3.0-01,C3-01,48,States adopted a National policy on Gender education,C3,C3,BOOLEAN,COUNT_YES,INCREASE,0,0,,1,C3-01
-C3.0-02,C3-02,49,State implementing the national policy on gender education,C3,C3,BOOLEAN,COUNT_YES,INCREASE,0,0,,1,C3-02
-C3.0-03,C3-03,50,Schools implementing awareness programs on climate change,C3,C3,NUMBER,SUM,INCREASE,1,0,,1,C3-03
-C3.0-04,C3-04,51,% schools implementing awareness programs on climate change,C3,C3,PERCENT,AVERAGE_NONZERO,INCREASE,0,0,,1,C3-04
-C3.0-05,C3-05,52,Schools with functional Eco club,C3,C3,NUMBER,SUM,INCREASE,1,0,,1,C3-05
-C3.0-06,C3-06,53,Grievances received through redress mechanisms,C3,C3,NUMBER,SUM,INCREASE,1,0,,1,C3-06
-C3.0-07,C3-07,54,Grievances addressed through redress mechanisms,C3,C3,NUMBER,SUM,INCREASE,1,0,,1,C3-07
+code,legacy_code,number,name,component,subcomponent,unit,aggregation_method,direction,is_cumulative,time_basis,is_composite,composite_of,is_reported,aliases
+PDO-01,PDO-01,1,Students enrolled in public schools benefiting from direct interventions to enhance learning,PDO,PDO,NUMBER,SUM,INCREASE,0,,0,,1,PDO-01
+PDO-02,PDO-02,2,Boys benefiting from direct interventions to enhance learning (JSS-SSS),PDO,PDO,NUMBER,SUM,INCREASE,0,,0,,1,PDO-02
+PDO-03,PDO-03,3,Girls benefiting from direct interventions to enhance learning (JSS-SSS),PDO,PDO,NUMBER,SUM,INCREASE,0,,0,,1,PDO-03
+PDO-04,PDO-04,4,Girls currently enrolled in public schools (JS1-SS3) in participating states,PDO,PDO,NUMBER,SUM,INCREASE,0,,0,,1,PDO-04
+PDO-05,PDO-05,5,Girls currently enrolled in JS1–JS3 in participating states,PDO,PDO,NUMBER,SUM,INCREASE,0,,0,,1,PDO-05
+PDO-06,PDO-06,6,Girls currently enrolled in SS1–SS3 in participating states,PDO,PDO,NUMBER,SUM,INCREASE,0,,0,,1,PDO-06
+PDO-07,PDO-07,7,Girls completion rate in participating states,PDO,PDO,PERCENT,AVERAGE_NONZERO,INCREASE,0,,0,,1,PDO-07
+PDO-08,PDO-08,8,Girls completion rate JS3,PDO,PDO,PERCENT,AVERAGE_NONZERO,INCREASE,0,,0,,1,PDO-08
+PDO-09,PDO-09,9,Girls completion rate SS3,PDO,PDO,PERCENT,AVERAGE_NONZERO,INCREASE,0,,0,,1,PDO-09
+PDO-10,PDO-10,10,Public schools in the state (JSS and SSS),PDO,PDO,NUMBER,SUM,INCREASE,0,,0,,1,PDO-10
+PDO-11,PDO-11,11,JS schools in the state,PDO,PDO,NUMBER,SUM,INCREASE,0,,0,,1,PDO-11
+PDO-12,PDO-12,12,SS schools in the state,PDO,PDO,NUMBER,SUM,INCREASE,0,,0,,1,PDO-12
+PDO-13,PDO-13,13,Girls attempting Junior WAEC or BECE,PDO,PDO,NUMBER,SUM,INCREASE,0,,0,,1,PDO-13
+PDO-14,PDO-14,14,Girls passing Junior WAEC or BECE,PDO,PDO,NUMBER,SUM,INCREASE,0,,0,,1,PDO-14
+PDO-15,PDO-15,15,Girls attempting Senior WAEC or NECO,PDO,PDO,NUMBER,SUM,INCREASE,0,,0,,1,PDO-15
+PDO-16,PDO-16,16,Girls passing Senior WAEC or NECO,PDO,PDO,NUMBER,SUM,INCREASE,0,,0,,1,PDO-16
+C1.0-01,C1-01,17,Constructed or Rehabilitated JSS classrooms,C1,C1,NUMBER,SUM,INCREASE,1,,1,C1.1-01|C1.2-01|C1.2-02,1,C1-01
+C1.1-01,C1-02,18,Classrooms constructed in new JSS,C1,C1.1,NUMBER,SUM,INCREASE,1,,0,,1,C1-02
+C1.2-01,C1-03,19,Constructed classrooms in existing JSS,C1,C1.2,NUMBER,SUM,INCREASE,1,,0,,1,C1-03
+C1.2-02,C1-04,20,Rehabilitated classrooms in existing JSS,C1,C1.2,NUMBER,SUM,INCREASE,1,,0,,1,C1-04
+C1.0-02,C1-05,21,Constructed or Rehabilitated SSS classrooms,C1,C1,NUMBER,SUM,INCREASE,1,,1,C1.1-02|C1.2-03|C1.2-04,1,C1-05
+C1.1-02,C1-06,22,Classrooms constructed in new SSS,C1,C1.1,NUMBER,SUM,INCREASE,1,,0,,1,C1-06
+C1.2-03,C1-07,23,Constructed classrooms in existing SSS,C1,C1.2,NUMBER,SUM,INCREASE,1,,0,,1,C1-07
+C1.2-04,C1-08,24,Rehabilitated classrooms in existing SSS,C1,C1.2,NUMBER,SUM,INCREASE,1,,0,,1,C1-08
+C1.2-05,C1-09,25,Public JSS and SSS schools receiving SIG,C1,C1.2,NUMBER,SUM,INCREASE,1,,0,,1,C1-09
+C1.0-03,C1-10,26,Constructed_rehabilitated toilets with WASH facilities for JSS_SSS Sch,C1,C1,NUMBER,SUM,INCREASE,1,,0,,1,C1-10
+C1.0-04,C1-11,27,Constructed girls toilets with WASH facilities for JSS_SSS Sch,C1,C1,NUMBER,SUM,INCREASE,1,,0,,1,C1-11
+C1.0-05,C1-12,28,Schools with both teachers codes of conduct & GBV/SEA (WSA) awareness mechanisms,C1,C1,NUMBER,SUM,INCREASE,1,,0,,1,C1-12
+C1.0-06,C1-13,29,Targeted schools that are implementing the whole school approach,C1,C1,NUMBER,SUM,INCREASE,1,,0,,1,C1-13
+C2.1-01,C2-01,30,Community members reached at local level on girls’ education (through direct activity),C2,C2.1,NUMBER,SUM,INCREASE,1,,0,,1,C2-01
+C2.1-02,C2-02,31,Community members reached at local level on girls’ education (through media),C2,C2.1,NUMBER,SUM,INCREASE,1,,0,,1,C2-02
+C2.0-01,C2-01+02,32,Community members reached at local level on girls’ education — all channels (C2-01 + C2-02),C2,C2.1,NUMBER,SUM,INCREASE,1,,1,C2.1-01|C2.1-02,0,C2-01+02
+C2.1-03,C2-03,33,Has the state design & implemented the media outreach program?,C2,C2.1,BOOLEAN,COUNT_YES,INCREASE,0,,0,,1,C2-03
+C2.2a-01,C2-04,34,Students participating in life skills program (safe space sessions for adolescent girls),C2,C2.2a,NUMBER,SUM,INCREASE,1,,0,,1,C2-04
+C2.2a-02,C2-05,35,Girls completing life skills program,C2,C2.2a,NUMBER,SUM,INCREASE,1,,0,,1,C2-05
+C2.2b-01,C2-06,36,Schools running the digital literacy program,C2,C2.2b,NUMBER,SUM,INCREASE,0,,0,,1,C2-06
+C2.2b-02,C2-07,37,Teachers trained in digital literacy,C2,C2.2b,NUMBER,SUM,INCREASE,1,,0,,1,C2-07
+C2.2b-03,C2-08,38,Students participating in digital skills literacy,C2,C2.2b,NUMBER,SUM,INCREASE,1,,0,,1,C2-08
+C2.2b-04,C2-09,39,Girls participating in digital skills literacy,C2,C2.2b,NUMBER,SUM,INCREASE,1,,0,,1,C2-09
+C2.2b-05,C2-10,40,Girls trained who demonstrate digital literacy,C2,C2.2b,NUMBER,SUM,INCREASE,1,,0,,1,C2-10
+C2.2c-01,C2-11,41,Out-of-school girls benefiting from non-formal education (2nd chance),C2,C2.2c,NUMBER,SUM,INCREASE,1,,0,,1,C2-11
+C2.3-01,C2-12,42,Scholarship program operational in the state?,C2,C2.3,BOOLEAN,COUNT_YES,INCREASE,0,,0,,1,C2-12
+C2.3-02,C2-13,43,Eligible girls receiving scholarship for transition P6 to JSS1,C2,C2.3,NUMBER,SUM,INCREASE,1,,0,,1,C2-13
+C2.3-03,C2-14,44,Eligible girls receiving scholarship for staying JSS2_JSS3,C2,C2.3,NUMBER,SUM,INCREASE,1,,0,,1,C2-14
+C2.3-04,C2-15,45,Eligible girls receiving scholarship for transition from JSS3 to SS1,C2,C2.3,NUMBER,SUM,INCREASE,1,,0,,1,C2-15
+C2.3-05,C2-16,46,Eligible girls receiving scholarship for staying SS2_SS3,C2,C2.3,NUMBER,SUM,INCREASE,1,,0,,1,C2-16
+C2.3-06,C2-17,47,Total social safety net beneficiaries,C2,C2.3,NUMBER,SUM,INCREASE,1,,0,,1,C2-17
+C3.0-01,C3-01,48,States adopted a National policy on Gender education,C3,C3,BOOLEAN,COUNT_YES,INCREASE,0,,0,,1,C3-01
+C3.0-02,C3-02,49,State implementing the national policy on gender education,C3,C3,BOOLEAN,COUNT_YES,INCREASE,0,,0,,1,C3-02
+C3.0-03,C3-03,50,Schools implementing awareness programs on climate change,C3,C3,NUMBER,SUM,INCREASE,1,,0,,1,C3-03
+C3.0-04,C3-04,51,% schools implementing awareness programs on climate change,C3,C3,PERCENT,AVERAGE_NONZERO,INCREASE,0,,0,,1,C3-04
+C3.0-05,C3-05,52,Schools with functional Eco club,C3,C3,NUMBER,SUM,INCREASE,1,,0,,1,C3-05
+C3.0-06,C3-06,53,Grievances received through redress mechanisms,C3,C3,NUMBER,SUM,INCREASE,1,,0,,1,C3-06
+C3.0-07,C3-07,54,Grievances addressed through redress mechanisms,C3,C3,NUMBER,SUM,INCREASE,1,,0,,1,C3-07

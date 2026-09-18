@@ -43,6 +43,14 @@
     return String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   }
 
+  /** Escape text before it goes into innerHTML. */
+  function esc(text) {
+    return String(text === null || text === undefined ? "" : text).replace(
+      /[&<>"']/g,
+      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
+    );
+  }
+
   function badge(text) {
     if (!text) return "—";
     return '<span class="badge ' + slug(text) + '">' + text + "</span>";
@@ -685,6 +693,103 @@
         { label: "Share", num: true, render: (r) => r.share_pct + "%" },
       ],
       summary.common_issues
+    );
+
+    await renderReconciliation();
+  }
+
+  // -- tracker reconciliation ------------------------------------------------
+  async function renderReconciliation() {
+    let report;
+    try {
+      report = await api.get("/reconciliation", { period: state.period });
+    } catch (error) {
+      // Reconciliation only makes sense for a period that decomposes.
+      $("reconciliation-summary").innerHTML =
+        '<p class="muted">' + esc(error.message || "Not available for this period.") + "</p>";
+      $("reconciliation-table").innerHTML = "";
+      $("reconciliation-lines").innerHTML = "";
+      return;
+    }
+
+    const s = report.summary;
+    if (!s.child_period_type) {
+      // A month has nothing finer inside it to reconcile against.
+      $("reconciliation-caption").textContent = "Select a quarter to reconcile";
+      $("reconciliation-summary").innerHTML =
+        '<p class="muted">' + esc(s.period_label) +
+        " has no finer reporting period inside it. Reconciliation compares a quarter " +
+        "against its own months.</p>";
+      $("reconciliation-table").innerHTML = "";
+      $("reconciliation-lines").innerHTML = "";
+      return;
+    }
+
+    const grain = s.child_period_type.toLowerCase();
+    $("reconciliation-caption").textContent =
+      s.states_tracking + " of " + s.states + " states have filed a " + grain +
+      " return for " + s.period_label + " (" + s.states_with_complete_tracker + " complete)";
+
+    if (!s.judged) {
+      $("reconciliation-summary").innerHTML =
+        '<p class="muted">No state has filed enough of the ' + esc(grain) +
+        " tracker for this period to reconcile anything yet.</p>";
+      $("reconciliation-table").innerHTML = "";
+      $("reconciliation-lines").innerHTML = "";
+      return;
+    }
+
+    $("reconciliation-summary").innerHTML =
+      '<div class="kv">' +
+      "<div><dt>States tracking</dt><dd>" + s.states_tracking + " of " + s.states +
+      "</dd></div>" +
+      "<div><dt>Figures reconciled</dt><dd>" + s.judged + "</dd></div>" +
+      "<div><dt>Agree</dt><dd>" + s.matched + "</dd></div>" +
+      "<div><dt>Agreement</dt><dd>" + pct(s.agreement) + "</dd></div>" +
+      "<div><dt>Disagree</dt><dd>" + (s.by_status.MISMATCH || 0) + "</dd></div>" +
+      "<div><dt>States with work to do</dt><dd>" +
+      (s.states_unreconciled.length ? esc(s.states_unreconciled.join(", ")) : "none") +
+      "</dd></div>" +
+      "</div>";
+
+    const reporting = report.states.filter((row) => row.parts_reported.length);
+    $("reconciliation-table").innerHTML = table(
+      [
+        { label: "State", render: (r) => esc(r.state_name) },
+        { label: "Cohort", key: "cohort_code" },
+        {
+          label: "Tracker returns",
+          render: (r) => r.parts_reported.length + " of " + r.parts_expected.length,
+        },
+        { label: "Reconciled", key: "judged", num: true },
+        { label: "Agree", key: "matched", num: true },
+        { label: "Disagree", key: "mismatched", num: true },
+        { label: "Missing from quarter", key: "framework_missing", num: true },
+        { label: "Missing from tracker", key: "tracker_missing", num: true },
+        { label: "Agreement", num: true, render: (r) => pct(r.agreement) },
+      ],
+      reporting
+    );
+
+    const lines = [];
+    report.states.forEach(function (row) {
+      row.lines.forEach(function (line) {
+        if (line.status === "MATCHED" || line.status === "INCOMPLETE") return;
+        lines.push(Object.assign({ state_name: row.state_name }, line));
+      });
+    });
+
+    $("reconciliation-lines").innerHTML = table(
+      [
+        { label: "State", render: (r) => esc(r.state_name) },
+        { label: "Code", render: (r) => esc(r.indicator_code) },
+        { label: "Verdict", render: (r) => badge(r.status.replace(/_/g, " ").toLowerCase()) },
+        { label: "Tracker implies", num: true, render: (r) => num(r.fine_value) },
+        { label: "Quarterly return", num: true, render: (r) => num(r.coarse_value) },
+        { label: "Variance", num: true, render: (r) => num(r.variance) },
+        { label: "Why", render: (r) => esc(r.note) },
+      ],
+      lines
     );
   }
 

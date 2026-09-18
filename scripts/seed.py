@@ -189,6 +189,9 @@ def seed_indicators(db) -> int:
         indicator.aggregation_method = row["aggregation_method"]
         indicator.direction = row["direction"]
         indicator.is_cumulative = _as_bool(row["is_cumulative"])
+        # Blank means "derive it", which reads a figure as a position at the
+        # period's end. Set it only for a genuine within-period flow.
+        indicator.time_basis = (row.get("time_basis") or "").strip().upper() or None
         indicator.is_reported = _as_bool(row["is_reported"])
         indicator.composite_of = _as_list(row["composite_of"])
 

@@ -20,8 +20,9 @@ from dataclasses import field as dc_field
 from datetime import date
 from typing import Any
 
-from app.core.enums import DQADimension, IndicatorUnit, Severity
+from app.core.enums import DQADimension, IndicatorUnit, ReconciliationStatus, Severity
 from app.models import Indicator, IndicatorValue, ReportingPeriod, State, Submission
+from app.services.reconciliation import ReconciliationLine
 
 #: Parent -> child indicator codes whose totals must not be exceeded.
 SUBSET_RELATIONSHIPS: dict[str, str] = {
@@ -91,6 +92,17 @@ class RuleContext:
     #: True when the previous period's figures come from a submission that did
     #: not pass validation, so comparisons against them are indicative.
     previous_is_provisional: bool = False
+    #: Performance-tracker reconciliation for this state and period. Empty
+    #: unless the state has filed at least one of the finer returns, so the
+    #: tracker rules stay silent until tracker reporting actually starts.
+    reconciliation: list[ReconciliationLine] = dc_field(default_factory=list)
+    #: True when every finer period inside this one has been reported, which is
+    #: what makes an indicator missing from the tracker a real omission rather
+    #: than one that may still arrive.
+    reconciliation_is_complete: bool = False
+
+    def reconciled(self, status: ReconciliationStatus) -> list[ReconciliationLine]:
+        return [line for line in self.reconciliation if line.status is status]
 
     @property
     def baseline_note(self) -> str:
@@ -895,6 +907,104 @@ def single_current_submission(ctx: RuleContext) -> Iterator[Finding]:
             field="is_current",
             observed=str(len(conflicting) + 1),
             expected="1",
+        )
+
+
+# ==========================================================================
+# CONSISTENCY -- the monthly tracker against the quarterly framework
+# ==========================================================================
+def _judged_lines(ctx: RuleContext) -> int:
+    """Checks the reconciliation actually performed, for the score denominator."""
+    return max(
+        sum(
+            1
+            for line in ctx.reconciliation
+            if line.status is not ReconciliationStatus.INCOMPLETE
+        ),
+        1,
+    )
+
+
+@rule(
+    "REC-001",
+    "Quarterly figure agrees with the performance tracker",
+    DQADimension.CONSISTENCY,
+    severity=Severity.WARNING,
+    description=(
+        "The same indicator reported twice -- monthly through the tracker and quarterly "
+        "through the results framework -- must give the same answer. Each indicator is "
+        "reconciled on its own time basis: a running total equals its last month, a count "
+        "within the period is the months added together, a rate is the position at the "
+        "period's end."
+    ),
+    weight=_judged_lines,
+)
+def tracker_agrees_with_framework(ctx: RuleContext) -> Iterator[Finding]:
+    for line in ctx.reconciled(ReconciliationStatus.MISMATCH):
+        yield Finding(
+            message=line.note,
+            indicator_id=line.indicator_id,
+            indicator_code=line.indicator_code,
+            field="value",
+            observed=f"{line.coarse_value:g}",
+            expected=f"{line.fine_value:g}",
+            context={
+                "basis": str(line.basis),
+                "variance": line.variance,
+                "variance_pct": line.variance_pct,
+                "months": line.part_values,
+            },
+        )
+
+
+@rule(
+    "REC-002",
+    "Nothing reported monthly is missing from the quarterly return",
+    DQADimension.CONSISTENCY,
+    severity=Severity.WARNING,
+    description=(
+        "A figure the state reported in the tracker but left out of the quarterly return "
+        "is a gap in the framework submission, not an absence of data."
+    ),
+    weight=_one,
+)
+def framework_covers_the_tracker(ctx: RuleContext) -> Iterator[Finding]:
+    for line in ctx.reconciled(ReconciliationStatus.FRAMEWORK_MISSING):
+        yield Finding(
+            message=line.note,
+            indicator_id=line.indicator_id,
+            indicator_code=line.indicator_code,
+            field="value",
+            observed="not reported",
+            expected=f"{line.fine_value:g}",
+            context={"basis": str(line.basis), "months": line.part_values},
+        )
+
+
+@rule(
+    "REC-003",
+    "Nothing reported quarterly is absent from the tracker",
+    DQADimension.CONSISTENCY,
+    severity=Severity.WARNING,
+    description=(
+        "An indicator reported for the quarter but absent from every month of a complete "
+        "tracker has no monthly evidence behind it."
+    ),
+    weight=_one,
+)
+def tracker_covers_the_framework(ctx: RuleContext) -> Iterator[Finding]:
+    # Only once every month is in: until then the figure may still arrive.
+    if not ctx.reconciliation_is_complete:
+        return
+    for line in ctx.reconciled(ReconciliationStatus.TRACKER_MISSING):
+        yield Finding(
+            message=line.note,
+            indicator_id=line.indicator_id,
+            indicator_code=line.indicator_code,
+            field="value",
+            observed=f"{line.coarse_value:g}",
+            expected="a monthly figure in the tracker",
+            context={"basis": str(line.basis), "months_reported": line.parts_reported},
         )
 
 
