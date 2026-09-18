@@ -546,8 +546,12 @@ def state_concentration(ctx: RuleContext) -> Iterator[Finding]:
     for value, indicator, effective in _numeric_values(ctx):
         if not _is_additive(indicator):
             continue
-        national = ctx.national_totals.get(indicator.id)
-        contributors = ctx.national_state_counts.get(indicator.id, 0)
+        # The peer total excludes this state, so add its own figure back to get
+        # the national total it is a share *of*. Dividing by the peers alone
+        # would let a dominant state exceed 100%.
+        peers_total = ctx.national_totals.get(indicator.id, 0.0)
+        contributors = ctx.national_state_counts.get(indicator.id, 0) + 1
+        national = peers_total + effective
         if not national or contributors < min_states or effective <= 0:
             continue
         share = effective / national * 100.0

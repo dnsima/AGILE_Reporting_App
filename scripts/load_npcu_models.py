@@ -229,14 +229,10 @@ def load_period(
                 values=entries,
                 notes=f"Loaded from {model.name}",
             ),
+            submitted_at=submitted_on,
         )
-        submission.uploaded_at = submitted_on
         submission.source_file_name = model.name
         db.flush()
-
-        from app.services.validation import run_validation
-
-        run_validation(db, submission)
         ingested += 1
         if submission.status == "REJECTED":
             rejected += 1
@@ -275,6 +271,15 @@ def main() -> None:
             datetime(2026, 7, 14, tzinfo=timezone.utc), translate=None,
         )
         print(f"Q2 2026: {i} ingested, {a} approved, {r} rejected")
+
+        # Cross-state checks need every state present, so re-run each period
+        # once the full national picture is in.
+        from app.services.ingestion.pipeline import revalidate_period
+
+        for code in (["2026-Q1"] if not args.skip_q1 else []) + ["2026-Q2"]:
+            period = reference.get_period_by_code(db, code)
+            result = revalidate_period(db, period)
+            print(f"  re-validated {code} with all states: {result}")
 
 
 if __name__ == "__main__":

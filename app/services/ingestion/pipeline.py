@@ -288,6 +288,8 @@ def ingest_manual(
     actor: User | None = None,
     *,
     auto_approve: bool = False,
+    submitted_at: datetime | None = None,
+    raise_queries: bool = True,
 ) -> tuple[Submission, IngestionDiagnostics, ValidationSummary]:
     """Ingest a JSON submission from a state system integrating over the API."""
     state = reference.get_state_by_code(db, payload.state_code)
@@ -342,7 +344,9 @@ def ingest_manual(
         mapped_count=len(mapped),
         unmapped_count=len(unmatched),
         uploaded_by_id=getattr(actor, "id", None),
-        uploaded_at=datetime.now(timezone.utc),
+        # Backloading historical returns needs the real submission date, or
+        # every one of them looks late to the timeliness check.
+        uploaded_at=submitted_at or datetime.now(timezone.utc),
         notes=payload.notes,
     )
     db.add(submission)
@@ -369,7 +373,7 @@ def ingest_manual(
     submission.ingestion_report = _diagnostics_dict(diagnostics)
     db.flush()
 
-    summary = _finalise(db, submission, actor, auto_approve)
+    summary = _finalise(db, submission, actor, auto_approve, raise_queries=raise_queries)
 
     audit.record(
         db,
@@ -466,6 +470,46 @@ def reject_submission(
         {"submission_id": submission.id, "state_id": submission.state_id},
     )
     return submission
+
+
+def revalidate_period(
+    db: Session, period, actor: User | None = None
+) -> dict[str, int]:
+    """Re-run validation for every current submission in a reporting period.
+
+    Cross-state checks -- concentration in particular -- can only be judged once
+    every state has reported. Validating at ingestion sees only the states that
+    happened to arrive first, so the NPCU re-runs the period once the reporting
+    window closes and the national picture is complete.
+    """
+    submissions = list(
+        db.scalars(
+            select(Submission).where(
+                Submission.period_id == period.id, Submission.is_current.is_(True)
+            )
+        )
+    )
+    findings = 0
+    raised = 0
+    for submission in submissions:
+        summary = run_validation(db, submission)
+        findings += summary.error_count + summary.warning_count
+        raised += len(queries.raise_queries(db, submission, actor=actor))
+
+    audit.record(
+        db,
+        action="period.revalidate",
+        entity_type="reporting_period",
+        entity_id=period.id,
+        actor=actor,
+        period_id=period.id,
+        summary=(
+            f"Re-validated {len(submissions)} submission(s) for {period.code} with the full "
+            f"national picture: {findings} finding(s), {raised} new quer(ies)."
+        ),
+    )
+    event_bus.publish("period.revalidated", {"period": period.code, "queries": raised})
+    return {"submissions": len(submissions), "findings": findings, "queries_raised": raised}
 
 
 def revalidate_submission(db: Session, submission: Submission, actor: User | None) -> ValidationSummary:
