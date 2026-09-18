@@ -308,27 +308,87 @@ WEAK_DIMENSION_THRESHOLD = 80.0
 #: At or below this, it costs two.
 CRITICAL_DIMENSION_THRESHOLD = 60.0
 
+#: Below this share of a state's figures counting towards the national totals,
+#: the grade drops one band; below the second, two.
+USABLE_FIGURES_THRESHOLD = 90.0
+CRITICAL_USABLE_FIGURES_THRESHOLD = 75.0
 
-def grade_for_submission(score: float | None, dimension_scores: list[float]) -> str:
-    """Grade a submission, letting one weak dimension cap the headline grade.
 
-    The overall score is a weighted mean, so a single badly failing dimension
-    (a state that reported only two-thirds of its indicators, say) can still
-    average out near the top. Capping the grade keeps the headline honest: the
-    mean says how much passed, the grade says whether anything needs attention.
+def grade_for_submission(
+    score: float | None,
+    dimension_scores: list[float],
+    *,
+    usable_share: float | None = None,
+) -> str:
+    """Grade a submission, capping the headline by what it hides.
+
+    The overall score is a per-check pass rate over thousands of checks, so it
+    is pinned near 100 for any plausible return: Kebbi's Q2 scored 97.8 with
+    sixteen of its fifty-three figures held out of the national totals. The
+    score answers "what proportion of checks passed?"; a reader takes the grade
+    as an answer to "how much of this can I rely on?". Two caps keep the grade
+    answering the second question.
+
+    ``dimension_scores`` catches a single badly failing dimension that the
+    weighted mean would otherwise absorb. ``usable_share`` -- the percentage of
+    this state's reported figures currently counting towards the national
+    totals -- catches the case the dimensions cannot see, because a figure held
+    out under query is one finding against thousands of checks but a whole
+    figure missing from the result.
+
+    The two caps are taken at their maximum rather than added: the held figures
+    usually *are* the findings driving a weak dimension, and charging twice for
+    one problem would be its own kind of dishonesty.
     """
     if score is None:
         return "No data"
     base = grade_for_score(score)
-    if not dimension_scores:
-        return base
 
-    weakest = min(dimension_scores)
     demotion = 0
-    if weakest < CRITICAL_DIMENSION_THRESHOLD:
-        demotion = 2
-    elif weakest < WEAK_DIMENSION_THRESHOLD:
-        demotion = 1
+    if dimension_scores:
+        weakest = min(dimension_scores)
+        if weakest < CRITICAL_DIMENSION_THRESHOLD:
+            demotion = 2
+        elif weakest < WEAK_DIMENSION_THRESHOLD:
+            demotion = 1
+
+    if usable_share is not None:
+        if usable_share < CRITICAL_USABLE_FIGURES_THRESHOLD:
+            demotion = max(demotion, 2)
+        elif usable_share < USABLE_FIGURES_THRESHOLD:
+            demotion = max(demotion, 1)
 
     index = min(GRADE_BANDS.index(base) + demotion, len(GRADE_BANDS) - 1)
     return GRADE_BANDS[index]
+
+
+def grade_note(
+    score: float | None,
+    dimension_scores: list[float],
+    *,
+    usable_share: float | None = None,
+) -> str | None:
+    """Say why the grade sits below the score's own band, if it does.
+
+    A grade nobody can account for is worse than no grade, so wherever the cap
+    bites it is shown with its reason.
+    """
+    if score is None:
+        return None
+    base = grade_for_score(score)
+    final = grade_for_submission(score, dimension_scores, usable_share=usable_share)
+    if final == base:
+        return None
+
+    reasons = []
+    if usable_share is not None and usable_share < USABLE_FIGURES_THRESHOLD:
+        reasons.append(
+            f"only {usable_share:.0f}% of its figures count towards the national totals"
+        )
+    if dimension_scores and min(dimension_scores) < WEAK_DIMENSION_THRESHOLD:
+        reasons.append(f"its weakest dimension scores {min(dimension_scores):.0f}")
+    return (
+        f"Scored {score:.1f} ({base}), graded {final} because "
+        + " and ".join(reasons)
+        + "."
+    )

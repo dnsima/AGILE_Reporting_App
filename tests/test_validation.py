@@ -242,12 +242,23 @@ class TestGating:
         assert summary.overall_score > 80
         assert summary.grade in {"Fair", "Weak", "Poor"}
 
-    def test_scores_are_persisted_for_every_dimension(self, db):
+    def test_scores_are_persisted_for_every_assessed_dimension(self, db):
+        """A dimension with no applicable checks is not persisted at all.
+
+        There is no number to record for it: nothing was checked, so neither
+        100 nor 0 would be true, and an absent row reads as "not assessed".
+        """
         submission = _submission(db)
         _value(db, submission, "KPI-001", value=100.0)
-        run_validation(db, submission)
+        summary = run_validation(db, submission)
 
         from app.models import DQAScore
 
-        stored = db.query(DQAScore).filter_by(submission_id=submission.id).all()
-        assert {row.dimension for row in stored} == {str(d) for d in DQADimension}
+        stored = {
+            row.dimension
+            for row in db.query(DQAScore).filter_by(submission_id=submission.id)
+        }
+        assessed = {d.dimension for d in summary.dimensions if d.score is not None}
+        unassessed = {d.dimension for d in summary.dimensions if d.score is None}
+        assert stored == assessed
+        assert stored | unassessed == {str(d) for d in DQADimension}

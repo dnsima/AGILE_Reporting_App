@@ -26,7 +26,11 @@ class ValidationIssueRead(ORMModel):
 
 class DimensionScore(BaseModel):
     dimension: str
-    score: float
+    #: NULL when nothing in this dimension could be checked. A dimension with
+    #: no applicable checks is not a perfect score; it is an unanswered
+    #: question, and it is left out of the weighted mean rather than carried
+    #: into it as a free 100.
+    score: float | None
     weight: float
     checks_run: int = 0
     checks_failed: int = 0
@@ -43,6 +47,11 @@ class ValidationSummary(BaseModel):
     info_count: int = 0
     overall_score: float = 0.0
     grade: str = "No data"
+    #: Figures counting towards the national totals, as a percentage of those
+    #: reported. The score is a per-check pass rate and cannot see this.
+    usable_share_pct: float | None = None
+    #: Why the grade sits below the score's own band, when it does.
+    grade_note: str | None = None
     dimensions: list[DimensionScore] = Field(default_factory=list)
     issues: list[ValidationIssueRead] = Field(default_factory=list)
 
@@ -60,6 +69,11 @@ class DQAScorecard(BaseModel):
     days_late: int | None = None
     overall_score: float | None = None
     grade: str = "No data"
+    figures_reported: int = 0
+    #: Figures not held out of the national totals by an open query.
+    figures_counting: int = 0
+    usable_share_pct: float | None = None
+    grade_note: str | None = None
     dimensions: list[DimensionScore] = Field(default_factory=list)
     error_count: int = 0
     warning_count: int = 0
@@ -74,6 +88,10 @@ class NationalDQASummary(BaseModel):
     reporting_rate_pct: float
     on_time_rate_pct: float
     national_score: float | None = None
+    figures_reported: int = 0
+    figures_counting: int = 0
+    usable_share_pct: float | None = None
+    grade_note: str | None = None
     grade: str = "No data"
     dimension_averages: list[DimensionScore] = Field(default_factory=list)
     cohort_scores: list[CohortDQASummary] = Field(default_factory=list)

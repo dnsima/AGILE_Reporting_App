@@ -8,11 +8,19 @@ from statistics import fmean
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.enums import DQADimension, Severity, SubmissionStatus, grade_for_score
+from app.core.enums import (
+    DQADimension,
+    Severity,
+    SubmissionStatus,
+    grade_for_score,
+    grade_for_submission,
+    grade_note,
+)
 from app.models import (
     Cohort,
     DQAScore,
     Indicator,
+    IndicatorValue,
     ReportingPeriod,
     State,
     Submission,
@@ -110,6 +118,18 @@ def state_scorecard(db: Session, state: State, period: ReportingPeriod) -> DQASc
     if submission.uploaded_at is not None:
         days_late = max(0, (submission.uploaded_at.date() - period.due_date).days)
 
+    # What the score cannot see: figures held out of the totals under query.
+    values = [
+        value
+        for value in db.scalars(
+            select(IndicatorValue).where(IndicatorValue.submission_id == submission.id)
+        )
+        if value.effective_value is not None
+    ]
+    counting = sum(1 for value in values if value.is_valid)
+    usable_share = 100.0 * counting / len(values) if values else None
+    dimensions = _dimension_scores(db, submission.id)
+
     return DQAScorecard(
         state_code=state.code,
         state_name=state.name,
@@ -121,7 +141,15 @@ def state_scorecard(db: Session, state: State, period: ReportingPeriod) -> DQASc
         days_late=days_late,
         overall_score=submission.dqa_score,
         grade=submission.dqa_grade or grade_for_score(submission.dqa_score),
-        dimensions=_dimension_scores(db, submission.id),
+        figures_reported=len(values),
+        figures_counting=counting,
+        usable_share_pct=None if usable_share is None else round(usable_share, 1),
+        grade_note=grade_note(
+            submission.dqa_score,
+            [row.score for row in dimensions if row.score is not None],
+            usable_share=usable_share,
+        ),
+        dimensions=dimensions,
         error_count=submission.error_count,
         warning_count=submission.warning_count,
         top_issues=[
@@ -205,6 +233,15 @@ def national_summary(db: Session, period: ReportingPeriod) -> NationalDQASummary
     on_time = [card for card in submitted if (card.days_late or 0) == 0]
     national_score = round(fmean(card.overall_score for card in scored), 2) if scored else None
 
+    # Graded the same way a state is: a national figure that leaves 1 in 10
+    # reported figures out of its own totals is not "Excellent" either.
+    figures_reported = sum(card.figures_reported for card in submitted)
+    figures_counting = sum(card.figures_counting for card in submitted)
+    national_usable = (
+        100.0 * figures_counting / figures_reported if figures_reported else None
+    )
+    dimension_averages = _average_dimensions(scored)
+
     # Count the states each rule affects, not the raw number of findings, and
     # read every issue rather than the truncated per-card top-10.
     submission_ids = {
@@ -249,8 +286,20 @@ def national_summary(db: Session, period: ReportingPeriod) -> NationalDQASummary
         reporting_rate_pct=round(len(submitted) / len(states) * 100, 2) if states else 0.0,
         on_time_rate_pct=round(len(on_time) / len(states) * 100, 2) if states else 0.0,
         national_score=national_score,
-        grade=grade_for_score(national_score),
-        dimension_averages=_average_dimensions(scored),
+        grade=grade_for_submission(
+            national_score,
+            [row.score for row in dimension_averages if row.score is not None],
+            usable_share=national_usable,
+        ),
+        figures_reported=figures_reported,
+        figures_counting=figures_counting,
+        usable_share_pct=None if national_usable is None else round(national_usable, 1),
+        grade_note=grade_note(
+            national_score,
+            [row.score for row in dimension_averages if row.score is not None],
+            usable_share=national_usable,
+        ),
+        dimension_averages=dimension_averages,
         cohort_scores=[cohort_summary(db, cohort, period, scorecards) for cohort in cohorts],
         scorecards=sorted(
             scorecards,

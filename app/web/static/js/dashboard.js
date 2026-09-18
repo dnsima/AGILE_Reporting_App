@@ -699,6 +699,9 @@
       '<div class="kv">' +
       "<div><dt>National score</dt><dd>" + num(summary.national_score) + "</dd></div>" +
       "<div><dt>Grade</dt><dd>" + badge(summary.grade) + "</dd></div>" +
+      "<div><dt>Figures counting</dt><dd>" + pct(summary.usable_share_pct) +
+      '<span style="display:block;font-size:.72rem;font-weight:400;color:var(--text-muted)">' +
+      summary.figures_counting + " of " + summary.figures_reported + "</span></dd></div>" +
       "<div><dt>Reporting rate</dt><dd>" + pct(summary.reporting_rate_pct) + "</dd></div>" +
       "<div><dt>On-time rate</dt><dd>" + pct(summary.on_time_rate_pct) + "</dd></div>" +
       "<div><dt>Cleared for analysis</dt><dd>" + summary.states_approved + "</dd></div>" +
@@ -706,14 +709,21 @@
       table(
         [
           { label: "Dimension", render: (r) => r.dimension.charAt(0) + r.dimension.slice(1).toLowerCase() },
-          { label: "Score", num: true, render: (r) => num(r.score) },
-          { label: "Grade", render: (r) => badge(r.grade) },
+          {
+            label: "Score",
+            num: true,
+            render: (r) => (r.score === null ? "not assessed" : num(r.score)),
+          },
+          { label: "Grade", render: (r) => (r.score === null ? "—" : badge(r.grade)) },
           { label: "Weight", num: true, render: (r) => num(r.weight, 1) },
           { label: "Checks run", key: "checks_run", num: true },
           { label: "Checks failed", key: "checks_failed", num: true },
         ],
         summary.dimension_averages
-      );
+      ) +
+      (summary.grade_note
+        ? '<p class="grade-note">' + esc(summary.grade_note) + "</p>"
+        : "");
 
     $("dqa-table").innerHTML = table(
       [
@@ -722,12 +732,27 @@
         { label: "Status", render: (r) => badge(r.status) },
         { label: "Score", num: true, render: (r) => num(r.overall_score) },
         { label: "Grade", render: (r) => badge(r.grade) },
+        {
+          label: "Figures counting",
+          num: true,
+          render: (r) =>
+            r.figures_reported
+              ? r.figures_counting + " of " + r.figures_reported +
+                " (" + Math.round(r.usable_share_pct) + "%)"
+              : "—",
+        },
         { label: "Errors", key: "error_count", num: true },
         { label: "Warnings", key: "warning_count", num: true },
         { label: "Days late", num: true, render: (r) => (r.days_late === null ? "—" : r.days_late) },
         {
-          label: "Top finding",
-          render: (r) => (r.top_issues && r.top_issues.length ? r.top_issues[0].message : "—"),
+          // A capped grade always travels with its reason.
+          label: "Why the grade",
+          render: (r) =>
+            r.grade_note
+              ? esc(r.grade_note)
+              : r.top_issues && r.top_issues.length
+                ? esc(r.top_issues[0].message)
+                : "—",
         },
       ],
       summary.scorecards

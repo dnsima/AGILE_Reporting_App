@@ -32,6 +32,7 @@ from app.core.enums import (
     SubmissionStatus,
     grade_for_score,
     grade_for_submission,
+    grade_note,
 )
 from app.core.logging_config import get_logger
 from app.models import (
@@ -402,6 +403,19 @@ def _completeness_score(ctx: RuleContext) -> tuple[float, dict]:
     }
 
 
+def _usable_share(ctx: RuleContext) -> float | None:
+    """Percentage of this state's reported figures counting towards the totals.
+
+    A figure held out under query is excluded from every aggregation, so it is
+    absent from the result in a way no per-check score registers.
+    """
+    reported = [value for value in ctx.values if value.effective_value is not None]
+    if not reported:
+        return None
+    counting = sum(1 for value in reported if value.is_valid)
+    return 100.0 * counting / len(reported)
+
+
 def run_validation(db: Session, submission: Submission, *, persist: bool = True) -> ValidationSummary:
     """Execute every active rule against ``submission`` and score its data quality."""
     ctx = build_context(db, submission)
@@ -424,7 +438,10 @@ def run_validation(db: Session, submission: Submission, *, persist: bool = True)
         if override is not None and not override.is_active:
             continue
 
-        weight = max(definition.weight_fn(ctx), 1)
+        # A rule with nothing to look at contributes nothing. Crediting it with
+        # a check it never ran is the same error as the inflated weights, one
+        # order of magnitude smaller.
+        weight = max(definition.weight_fn(ctx), 0)
         checks[definition.dimension] += weight
 
         try:
@@ -497,18 +514,23 @@ def run_validation(db: Session, submission: Submission, *, persist: bool = True)
             component_penalty = min(rule_penalties.get("COM-002", 0.0) * 0.5, 10.0)
             score = max(0.0, score - component_penalty)
             details["component_penalty"] = round(component_penalty, 2)
+        elif checks[dimension] <= 0:
+            # Nothing applicable to check. Not a pass, not a failure.
+            score = None
+            details = {"checks": 0, "note": "No applicable checks for this submission"}
         else:
-            denominator = max(checks[dimension], 1.0)
-            score = max(0.0, 100.0 * (1.0 - penalties[dimension] / denominator))
+            score = max(0.0, 100.0 * (1.0 - penalties[dimension] / checks[dimension]))
             details = {
                 "checks": int(checks[dimension]),
                 "penalty": round(penalties[dimension], 2),
             }
 
-        score = round(min(100.0, max(0.0, score)), 2)
+        if score is not None:
+            score = round(min(100.0, max(0.0, score)), 2)
         weight = DQA_WEIGHTS[dimension]
-        weighted_total += score * weight
-        weight_total += weight
+        if score is not None:
+            weighted_total += score * weight
+            weight_total += weight
 
         dimension_scores.append(
             DimensionScore(
@@ -523,7 +545,9 @@ def run_validation(db: Session, submission: Submission, *, persist: bool = True)
         )
 
     overall = round(weighted_total / weight_total, 2) if weight_total else 0.0
-    grade = grade_for_submission(overall, [d.score for d in dimension_scores])
+    assessed = [d.score for d in dimension_scores if d.score is not None]
+    usable_share = _usable_share(ctx)
+    grade = grade_for_submission(overall, assessed, usable_share=usable_share)
 
     summary = ValidationSummary(
         submission_id=submission.id,
@@ -534,6 +558,8 @@ def run_validation(db: Session, submission: Submission, *, persist: bool = True)
         info_count=counts[Severity.INFO],
         overall_score=overall,
         grade=grade,
+        usable_share_pct=None if usable_share is None else round(usable_share, 1),
+        grade_note=grade_note(overall, assessed, usable_share=usable_share),
         dimensions=dimension_scores,
         issues=issue_reads,
     )
@@ -575,6 +601,11 @@ def _persist(
 
     db.add_all(issues)
     for dimension in dimension_scores:
+        if dimension.score is None:
+            # Nothing applicable was checked, so there is no score to record.
+            # An absent row reads as "not assessed"; a row would have to carry
+            # a number, and any number here would be a claim we cannot make.
+            continue
         db.add(
             DQAScore(
                 submission_id=submission.id,

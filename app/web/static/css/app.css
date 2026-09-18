@@ -356,3 +356,7 @@ tr.query-row.overdue td.due { color: var(--bad); font-weight: 700; }
 .badge.active { background: var(--ok-bg); color: var(--ok); }
 .badge.used { background: var(--info-bg); color: var(--info); }
 .badge.expired, .badge.revoked { background: var(--surface-2); color: var(--text-muted); }
+
+/* A capped grade always travels with its reason. */
+.grade-note { margin: 12px 0 0; padding: 9px 12px; border-radius: 8px;
+  background: var(--warn-bg); color: var(--warn); font-size: .8rem; line-height: 1.45; }

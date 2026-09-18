@@ -203,8 +203,16 @@ def _dqa_section(db: Session, period: ReportingPeriod, scope: ReportScope, scope
     section.add_paragraph(
         f"The consolidated DQA score for {period.code} is {_fmt(summary.national_score)} out of "
         f"100 ({summary.grade}), averaged across the {summary.states_reported} states that "
-        "submitted data."
+        "submitted data. The score is the proportion of applicable checks that passed; the "
+        "grade additionally accounts for figures held out of the totals, which no per-check "
+        "score can see."
     )
+    if summary.figures_reported:
+        section.add_paragraph(
+            f"{summary.figures_counting} of {summary.figures_reported} reported figures "
+            f"({_pct(summary.usable_share_pct)}) count towards the consolidated results."
+            + (f" {summary.grade_note}" if summary.grade_note else "")
+        )
     section.add_table(
         Table(
             caption="National average by data quality dimension",
@@ -212,8 +220,8 @@ def _dqa_section(db: Session, period: ReportingPeriod, scope: ReportScope, scope
             rows=[
                 [
                     dimension.dimension.title(),
-                    _fmt(dimension.score),
-                    dimension.grade or "",
+                    "not assessed" if dimension.score is None else _fmt(dimension.score),
+                    "" if dimension.score is None else (dimension.grade or ""),
                     str(dimension.details.get("states_assessed", "—")),
                     _fmt(dimension.weight, 1),
                 ]
@@ -224,7 +232,10 @@ def _dqa_section(db: Session, period: ReportingPeriod, scope: ReportScope, scope
     section.add_table(
         Table(
             caption="State DQA scorecards",
-            headers=["State", "Cohort", "Status", "Score", "Grade", "Errors", "Warnings", "Days late"],
+            headers=[
+                "State", "Cohort", "Status", "Score", "Grade", "Figures counting",
+                "Errors", "Warnings", "Days late",
+            ],
             rows=[
                 [
                     card.state_name,
@@ -232,12 +243,23 @@ def _dqa_section(db: Session, period: ReportingPeriod, scope: ReportScope, scope
                     card.status or "—",
                     _fmt(card.overall_score),
                     card.grade,
+                    (
+                        f"{card.figures_counting} of {card.figures_reported} "
+                        f"({_pct(card.usable_share_pct)})"
+                        if card.figures_reported
+                        else "—"
+                    ),
                     str(card.error_count),
                     str(card.warning_count),
                     "—" if card.days_late is None else str(card.days_late),
                 ]
                 for card in scorecards
             ],
+            align=["left", "left", "left", "right", "left", "right", "right", "right", "right"],
+            note=(
+                "A grade below the score's own band is capped by figures held out of the "
+                "totals or by a weak dimension; the reason is given per state on the platform."
+            ),
         )
     )
     if summary.common_issues:

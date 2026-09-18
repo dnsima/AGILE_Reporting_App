@@ -389,6 +389,63 @@ cleared, and no analysis endpoint will ever read it.
 | `GET` | `/quality/rules` | `data:read` — the rule catalogue |
 | `PATCH` | `/quality/rules/{code}` | `reference:manage` — severity, thresholds, on/off |
 
+### Why the grade can sit below the score
+
+Two numbers, answering two different questions. **The score** is the proportion
+of applicable checks that passed, weighted across the seven dimensions. **The
+grade** additionally accounts for what a per-check score cannot see.
+
+A per-check pass rate is pinned near 100 for any plausible return: 53
+indicators against 26 rules is thousands of checks, and a hundred failures
+against that is 99%. Kebbi's Q2 scored 94.8 with **sixteen of its fifty-three
+figures held out of the national totals** — "Excellent" by score, and
+misleading.
+
+So the grade is capped:
+
+| Condition | Grade drops |
+|---|---|
+| Below 90% of figures counting towards the totals | one band |
+| Below 75% | two bands |
+| Weakest dimension below 80 | one band |
+| Weakest dimension below 60 | two bands |
+
+The caps are taken at their **maximum**, not added: held figures usually *are*
+the findings driving a weak dimension, and charging twice for one problem would
+be its own kind of dishonesty. Wherever a capped grade appears it carries
+`grade_note` saying why, because a grade nobody can account for is worse than
+no grade. `usable_share_pct`, `figures_reported` and `figures_counting` are on
+the scorecard and the national summary.
+
+### Checks are counted only where they could run
+
+A rule's weight is the number of checks it contributes to its dimension's
+denominator. Left at "one per reported figure" it counted checks nothing could
+perform: `INT-001` needs a numerator and a denominator, and no figure on the Q2
+return carries either, so it declared 929 checks and ran none. Six rules were
+in that position, inflating the period's denominator from 7,872 real checks to
+15,139 and diluting every genuine finding against thousands that never
+happened.
+
+Each such rule now weighs exactly the figures it iterates, through a shared
+candidate function, so the weight and the rule body cannot drift apart when one
+of them is edited. `checks_run` on every dimension is now a true count.
+
+Fixing this had a second effect worth knowing: the weak-dimension cap, which
+had been in the code all along, had never once fired. With an honest
+denominator Kebbi's consistency reads 76 and Plateau's integrity 67, and the
+cap does its job.
+
+### Dimensions that could not be assessed
+
+A dimension where nothing applicable could be checked scores `null`, not 100.
+It is an unanswered question, not a perfect one, and it is left out of the
+weighted mean rather than carried into it as a free pass. No `dqa_scores` row
+is written for it, because any number stored there would be a claim the data
+does not support. This is reachable in practice: the first submission of a
+brand-new period has no previous figures, no targets and no peers, so accuracy
+and consistency are genuinely unassessable.
+
 ## KPI analysis
 
 | Method | Path | Notes |

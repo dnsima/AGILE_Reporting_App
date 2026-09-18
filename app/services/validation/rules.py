@@ -189,6 +189,105 @@ def _numeric_values(ctx: RuleContext) -> Iterator[tuple[IndicatorValue, Indicato
         yield value, indicator, effective
 
 
+# --------------------------------------------------------------------------
+# What a rule can actually look at
+# --------------------------------------------------------------------------
+# A rule's weight is the number of checks it contributes to its dimension's
+# denominator, and the default -- one per reported figure -- overstates most of
+# them badly. INT-001 can only examine a figure that carries a numerator and a
+# denominator; on the real Q2 return, nothing does, so it declared 929 checks
+# and performed none. Six rules were in that position, inflating the denominator
+# for the period from 7,886 real checks to 15,139 and diluting every genuine
+# finding against thousands of checks nobody ran.
+#
+# Each of these returns the figures its rule iterates, and the rule iterates it,
+# so the weight and the body cannot drift apart when one of them is edited.
+def _with_numerator_and_denominator(ctx: RuleContext) -> list[IndicatorValue]:
+    return [
+        value
+        for value in ctx.values
+        if ctx.indicator(value) is not None
+        and value.numerator is not None
+        and value.denominator is not None
+    ]
+
+
+def _percent_with_arithmetic(ctx: RuleContext) -> list[tuple[IndicatorValue, Indicator]]:
+    rows = []
+    for value in ctx.values:
+        indicator = ctx.indicator(value)
+        if indicator is None or indicator.unit != IndicatorUnit.PERCENT:
+            continue
+        if value.value is None or value.numerator is None or not value.denominator:
+            continue
+        rows.append((value, indicator))
+    return rows
+
+
+def _composite_values(ctx: RuleContext) -> list[tuple[IndicatorValue, Indicator, float]]:
+    return [row for row in _numeric_values(ctx) if row[1].composite_of]
+
+
+def _values_with_target(ctx: RuleContext) -> list[tuple[IndicatorValue, Indicator, float]]:
+    return [row for row in _numeric_values(ctx) if ctx.targets.get(row[1].id)]
+
+
+def _values_with_history(
+    ctx: RuleContext, minimum: int
+) -> list[tuple[IndicatorValue, Indicator, float]]:
+    return [row for row in _numeric_values(ctx) if len(ctx.history.get(row[1].id, [])) >= minimum]
+
+
+def _values_needing_denominator(ctx: RuleContext) -> list[tuple[IndicatorValue, Indicator]]:
+    rows = []
+    for value in ctx.values:
+        indicator = ctx.indicator(value)
+        if indicator is None or not indicator.requires_numerator_denominator:
+            continue
+        if value.numerator is None:
+            continue
+        rows.append((value, indicator))
+    return rows
+
+
+def _values_requiring_pair(ctx: RuleContext) -> list[tuple[IndicatorValue, Indicator]]:
+    return [
+        (value, indicator)
+        for value in ctx.values
+        if (indicator := ctx.indicator(value)) is not None
+        and indicator.requires_numerator_denominator
+    ]
+
+
+def _additive_with_national(ctx: RuleContext) -> list[tuple[IndicatorValue, Indicator, float]]:
+    return [
+        row
+        for row in _numeric_values(ctx)
+        if _is_additive(row[1]) and ctx.national_totals.get(row[1].id)
+    ]
+
+
+def _values_with_previous(ctx: RuleContext) -> list[tuple[IndicatorValue, Indicator, float]]:
+    return [row for row in _numeric_values(ctx) if row[1].id in ctx.previous_values]
+
+
+def _cumulative_with_previous(ctx: RuleContext) -> list[tuple[IndicatorValue, Indicator, float]]:
+    return [row for row in _values_with_previous(ctx) if row[1].is_cumulative]
+
+
+def _whole_number_values(ctx: RuleContext) -> list[tuple[IndicatorValue, Indicator, float]]:
+    return [row for row in _numeric_values(ctx) if row[1].decimal_places == 0]
+
+
+def _values_with_disaggregation(ctx: RuleContext) -> list[IndicatorValue]:
+    return [value for value in ctx.values if value.disaggregation]
+
+
+def _sized(candidates) -> Callable[[RuleContext], int]:
+    """Weight a rule by the number of figures it can actually examine."""
+    return lambda ctx: len(candidates(ctx))
+
+
 # ==========================================================================
 # INTEGRITY
 # ==========================================================================
@@ -199,12 +298,11 @@ def _numeric_values(ctx: RuleContext) -> Iterator[tuple[IndicatorValue, Indicato
     severity=Severity.ERROR,
     blocking=True,
     description="For ratio-style indicators the numerator must be a subset of the denominator.",
+    weight=_sized(_with_numerator_and_denominator),
 )
 def numerator_within_denominator(ctx: RuleContext) -> Iterator[Finding]:
-    for value in ctx.values:
+    for value in _with_numerator_and_denominator(ctx):
         indicator = ctx.indicator(value)
-        if indicator is None or value.numerator is None or value.denominator is None:
-            continue
         if value.denominator and value.numerator > value.denominator:
             yield Finding(
                 message=(
@@ -227,15 +325,11 @@ def numerator_within_denominator(ctx: RuleContext) -> Iterator[Finding]:
     severity=Severity.WARNING,
     description="A reported percentage should agree with its own numerator and denominator.",
     config={"tolerance_pct_points": 0.5},
+    weight=_sized(_percent_with_arithmetic),
 )
 def percentage_arithmetic(ctx: RuleContext) -> Iterator[Finding]:
     tolerance = float(ctx.config("INT-002", "tolerance_pct_points", 0.5))
-    for value in ctx.values:
-        indicator = ctx.indicator(value)
-        if indicator is None or indicator.unit != IndicatorUnit.PERCENT:
-            continue
-        if value.value is None or value.numerator is None or not value.denominator:
-            continue
+    for value, indicator in _percent_with_arithmetic(ctx):
         derived = value.numerator / value.denominator * 100.0
         if abs(derived - value.value) > tolerance:
             yield Finding(
@@ -319,9 +413,8 @@ def rows_fully_mapped(ctx: RuleContext) -> Iterator[Finding]:
         "every state regardless of what it implements."
     ),
     config={"tolerance": 0.5},
-    weight=lambda ctx: max(
-        sum(1 for i in ctx.indicators_by_id.values() if i.composite_of), 1
-    ),
+    # Composites this state actually reported, not every one in the catalogue.
+    weight=_sized(_composite_values),
 )
 def composite_equals_parts(ctx: RuleContext) -> Iterator[Finding]:
     tolerance = float(ctx.config("INT-005", "tolerance", 0.5))
@@ -442,15 +535,14 @@ def period_still_open(ctx: RuleContext) -> Iterator[Finding]:
     severity=Severity.WARNING,
     description="Achievement far above target usually signals a unit or period error.",
     config={"max_ratio_pct": 300.0},
+    weight=_sized(_values_with_target),
 )
 def plausible_versus_target(ctx: RuleContext) -> Iterator[Finding]:
     ceiling = float(
         ctx.config("ACC-001", "max_ratio_pct", ctx.settings.accuracy_target_ratio_pct)
     )
-    for value, indicator, effective in _numeric_values(ctx):
-        target = ctx.targets.get(indicator.id)
-        if not target:
-            continue
+    for value, indicator, effective in _values_with_target(ctx):
+        target = ctx.targets[indicator.id]
         ratio = effective / target * 100.0
         if ratio > ceiling:
             yield Finding(
@@ -475,16 +567,17 @@ def plausible_versus_target(ctx: RuleContext) -> Iterator[Finding]:
     severity=Severity.WARNING,
     description="Compares the reading with this state's previous readings for the indicator.",
     config={"zscore_threshold": 3.0, "min_history": 3},
+    weight=lambda ctx: len(
+        _values_with_history(ctx, int(ctx.config("ACC-002", "min_history", 3)))
+    ),
 )
 def outlier_against_history(ctx: RuleContext) -> Iterator[Finding]:
     threshold = float(
         ctx.config("ACC-002", "zscore_threshold", ctx.settings.outlier_zscore_threshold)
     )
     min_history = int(ctx.config("ACC-002", "min_history", 3))
-    for value, indicator, effective in _numeric_values(ctx):
-        series = ctx.history.get(indicator.id, [])
-        if len(series) < min_history:
-            continue
+    for value, indicator, effective in _values_with_history(ctx, min_history):
+        series = ctx.history[indicator.id]
         mean = statistics.fmean(series)
         try:
             deviation = statistics.stdev(series)
@@ -516,14 +609,10 @@ def outlier_against_history(ctx: RuleContext) -> Iterator[Finding]:
     severity=Severity.ERROR,
     blocking=True,
     description="A non-zero numerator with a zero or missing denominator cannot be computed.",
+    weight=_sized(_values_needing_denominator),
 )
 def denominator_usable(ctx: RuleContext) -> Iterator[Finding]:
-    for value in ctx.values:
-        indicator = ctx.indicator(value)
-        if indicator is None or not indicator.requires_numerator_denominator:
-            continue
-        if value.numerator is None:
-            continue
+    for value, indicator in _values_needing_denominator(ctx):
         if value.denominator in (None, 0):
             yield Finding(
                 message=(
@@ -549,14 +638,13 @@ def denominator_usable(ctx: RuleContext) -> Iterator[Finding]:
         "unit error or a double count rather than genuine concentration."
     ),
     config={"max_share_pct": 60.0, "min_states": 5},
+    weight=_sized(_additive_with_national),
 )
 def state_concentration(ctx: RuleContext) -> Iterator[Finding]:
     ceiling = float(ctx.config("ACC-004", "max_share_pct", 60.0))
     min_states = int(ctx.config("ACC-004", "min_states", 5))
 
-    for value, indicator, effective in _numeric_values(ctx):
-        if not _is_additive(indicator):
-            continue
+    for value, indicator, effective in _additive_with_national(ctx):
         # The peer total excludes this state, so add its own figure back to get
         # the national total it is a share *of*. Dividing by the peers alone
         # would let a dominant state exceed 100%.
@@ -620,12 +708,10 @@ def expected_indicators_present(ctx: RuleContext) -> Iterator[Finding]:
     DQADimension.COMPLETENESS,
     severity=Severity.WARNING,
     description="Weighted national aggregation needs the components, not just the percentage.",
+    weight=_sized(_values_requiring_pair),
 )
 def components_supplied(ctx: RuleContext) -> Iterator[Finding]:
-    for value in ctx.values:
-        indicator = ctx.indicator(value)
-        if indicator is None or not indicator.requires_numerator_denominator:
-            continue
+    for value, indicator in _values_requiring_pair(ctx):
         if value.value is None and value.numerator is None:
             continue
         if value.numerator is None or value.denominator is None:
@@ -653,14 +739,15 @@ def components_supplied(ctx: RuleContext) -> Iterator[Finding]:
     severity=Severity.WARNING,
     description="Very large swings between consecutive periods are flagged for verification.",
     config={"threshold_pct": 200.0},
+    weight=_sized(_values_with_previous),
 )
 def period_over_period_change(ctx: RuleContext) -> Iterator[Finding]:
     threshold = float(
         ctx.config("CON-001", "threshold_pct", ctx.settings.consistency_change_threshold_pct)
     )
-    for value, indicator, effective in _numeric_values(ctx):
-        previous = ctx.previous_values.get(indicator.id)
-        if previous is None or previous == 0:
+    for value, indicator, effective in _values_with_previous(ctx):
+        previous = ctx.previous_values[indicator.id]
+        if previous == 0:
             continue
         change = abs(effective - previous) / abs(previous) * 100.0
         if change > threshold:
@@ -686,14 +773,11 @@ def period_over_period_change(ctx: RuleContext) -> Iterator[Finding]:
     severity=Severity.ERROR,
     blocking=True,
     description="A cumulative total cannot fall below the value reported in an earlier period.",
+    weight=_sized(_cumulative_with_previous),
 )
 def cumulative_monotonic(ctx: RuleContext) -> Iterator[Finding]:
-    for value, indicator, effective in _numeric_values(ctx):
-        if not indicator.is_cumulative:
-            continue
-        previous = ctx.previous_values.get(indicator.id)
-        if previous is None:
-            continue
+    for value, indicator, effective in _cumulative_with_previous(ctx):
+        previous = ctx.previous_values[indicator.id]
         if effective < previous:
             yield Finding(
                 message=(
@@ -780,10 +864,11 @@ def value_in_range(ctx: RuleContext) -> Iterator[Finding]:
     DQADimension.VALIDITY,
     severity=Severity.INFO,
     description="Headcount indicators reported with decimals are rounded on ingestion.",
+    weight=_sized(_whole_number_values),
 )
 def counts_are_integers(ctx: RuleContext) -> Iterator[Finding]:
-    for value, indicator, effective in _numeric_values(ctx):
-        if indicator.unit != IndicatorUnit.NUMBER or indicator.decimal_places:
+    for value, indicator, effective in _whole_number_values(ctx):
+        if indicator.unit != IndicatorUnit.NUMBER:
             continue
         if abs(effective - round(effective)) > 1e-9:
             yield Finding(
@@ -803,9 +888,10 @@ def counts_are_integers(ctx: RuleContext) -> Iterator[Finding]:
     DQADimension.VALIDITY,
     severity=Severity.WARNING,
     description="Keeps sex, location and school-level labels comparable across states.",
+    weight=_sized(_values_with_disaggregation),
 )
 def disaggregation_vocabulary(ctx: RuleContext) -> Iterator[Finding]:
-    for value in ctx.values:
+    for value in _values_with_disaggregation(ctx):
         indicator = ctx.indicator(value)
         for axis, raw in (value.disaggregation or {}).items():
             allowed = ALLOWED_DISAGGREGATIONS.get(axis)
@@ -913,15 +999,20 @@ def single_current_submission(ctx: RuleContext) -> Iterator[Finding]:
 # CONSISTENCY -- the monthly tracker against the quarterly framework
 # ==========================================================================
 def _judged_lines(ctx: RuleContext) -> int:
-    """Checks the reconciliation actually performed, for the score denominator."""
-    return max(
-        sum(
-            1
-            for line in ctx.reconciliation
-            if line.status is not ReconciliationStatus.INCOMPLETE
-        ),
-        1,
+    """Checks the reconciliation actually performed, for the score denominator.
+
+    Zero until the state files a tracker return: a check against a stream
+    nobody has started is not a check that passed.
+    """
+    return sum(
+        1
+        for line in ctx.reconciliation
+        if line.status is not ReconciliationStatus.INCOMPLETE
     )
+
+
+def _reconciled_at_all(ctx: RuleContext) -> int:
+    return 1 if ctx.reconciliation else 0
 
 
 @rule(
@@ -965,7 +1056,7 @@ def tracker_agrees_with_framework(ctx: RuleContext) -> Iterator[Finding]:
         "A figure the state reported in the tracker but left out of the quarterly return "
         "is a gap in the framework submission, not an absence of data."
     ),
-    weight=_one,
+    weight=_reconciled_at_all,
 )
 def framework_covers_the_tracker(ctx: RuleContext) -> Iterator[Finding]:
     for line in ctx.reconciled(ReconciliationStatus.FRAMEWORK_MISSING):
@@ -989,7 +1080,7 @@ def framework_covers_the_tracker(ctx: RuleContext) -> Iterator[Finding]:
         "An indicator reported for the quarter but absent from every month of a complete "
         "tracker has no monthly evidence behind it."
     ),
-    weight=_one,
+    weight=_reconciled_at_all,
 )
 def tracker_covers_the_framework(ctx: RuleContext) -> Iterator[Finding]:
     # Only once every month is in: until then the figure may still arrive.

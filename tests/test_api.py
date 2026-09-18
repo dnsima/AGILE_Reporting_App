@@ -458,7 +458,8 @@ class TestAnalysisEndpoints:
             "/api/v1/quality/scorecards/KN", headers=ingested, params={"period": "2026-Q1"}
         ).json()
         assert card["state_name"] == "Kano"
-        assert {dim["dimension"] for dim in card["dimensions"]} == {
+        # A dimension nothing could be checked in is absent, not scored 100.
+        assert {dim["dimension"] for dim in card["dimensions"]} <= {
             "INTEGRITY", "TIMELINESS", "ACCURACY", "COMPLETENESS",
             "CONSISTENCY", "VALIDITY", "UNIQUENESS",
         }
