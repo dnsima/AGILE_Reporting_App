@@ -71,11 +71,31 @@ def get_cohort_by_code(db: Session, code: str, *, required: bool = True) -> Coho
     return cohort
 
 
-def active_states(db: Session, cohort_code: str | None = None) -> list[State]:
+def _states(db: Session, cohort_code: str | None, *, reporting_only: bool):
     stmt = select(State).where(State.is_active.is_(True)).order_by(State.name)
+    if reporting_only:
+        stmt = stmt.where(State.is_reporting.is_(True))
     if cohort_code:
         stmt = stmt.join(Cohort).where(func.upper(Cohort.code) == cohort_code.strip().upper())
     return list(db.scalars(stmt))
+
+
+def active_states(db: Session, cohort_code: str | None = None) -> list[State]:
+    """States expected to file returns -- the denominator for reporting rates.
+
+    A participating state that has not started reporting is not counted as a
+    non-reporter, because it was never asked.
+    """
+    return _states(db, cohort_code, reporting_only=True)
+
+
+def participating_states(db: Session, cohort_code: str | None = None) -> list[State]:
+    """Every state in the programme, including those not yet reporting.
+
+    This is the project's real footprint, and what a report's scope should
+    claim.
+    """
+    return _states(db, cohort_code, reporting_only=False)
 
 
 def active_indicators(

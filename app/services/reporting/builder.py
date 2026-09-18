@@ -39,6 +39,20 @@ def _pct(value: float | None) -> str:
     return "—" if value is None else f"{value:,.1f}%"
 
 
+def _indicator_count(indicators: list[Indicator]) -> str:
+    """Say 53 + 1 derived rather than 54.
+
+    The catalogue carries one row the platform computes rather than collects,
+    and a report that calls the framework 54 indicators contradicts every other
+    document the NPCU issues.
+    """
+    derived = sum(1 for indicator in indicators if not indicator.is_reported)
+    reported = len(indicators) - derived
+    if not derived:
+        return str(reported)
+    return f"{reported} reported + {derived} derived"
+
+
 # --------------------------------------------------------------------------
 # Narrative helpers
 # --------------------------------------------------------------------------
@@ -796,7 +810,11 @@ def build_report(
         scope_ref = cohort.code
         scope_label = cohort.name
     else:
-        scope_label = "National (36 states + FCT)"
+        # Counted, not asserted: AGILE covers the participating states, which
+        # is not every state in the federation, and a report that says
+        # otherwise overstates its own coverage.
+        participating = len(reference.participating_states(db))
+        scope_label = f"National ({participating} AGILE states)"
 
     title = request.title or (
         f"AGILE {period.period_type.replace('_', '-').title()} Report - {scope_label} - {period.label}"
@@ -819,7 +837,7 @@ def build_report(
                 + ". Figures change only through an accepted correction."
             ),
             "Scope": scope_label,
-            "Indicators covered": str(len(indicators)),
+            "Indicators covered": _indicator_count(indicators),
         },
     )
 
@@ -837,7 +855,8 @@ def build_report(
         f"AGILE states submitted reporting data and {national_dqa.states_approved} submissions "
         f"cleared the data quality gate. The consolidated DQA score is "
         f"{_fmt(national_dqa.national_score)}/100 ({national_dqa.grade}). Across the "
-        f"{len(indicators)} indicator(s) in scope, average achievement against target is "
+        f"{len(indicators)} indicators in scope ({_indicator_count(indicators)}), average "
+        f"achievement against target is "
         f"{_pct(board.average_achievement_pct)}, with {board.indicators_on_track} of "
         f"{board.indicators_with_target} measurable indicators at or above 90% of target."
     )

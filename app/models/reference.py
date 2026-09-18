@@ -64,7 +64,15 @@ class State(Base, TimestampMixin):
     cohort_id: Mapped[int | None] = mapped_column(ForeignKey("cohorts.id"), index=True)
     piu_contact_email: Mapped[str | None] = mapped_column(String(255))
     joined_on: Mapped[date | None] = mapped_column(Date)
+    #: In the programme. The Limited Financing states are participating states
+    #: from the day they are named, and are issued templates and applicability
+    #: matrices, whether or not they have filed anything yet.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    #: Expected to file returns. False for a participating state that has not
+    #: started -- which is a different fact from being inactive, and conflating
+    #: the two let a state file a return while being left out of every national
+    #: denominator it should have been counted in. Filing a return sets it.
+    is_reporting: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     cohort: Mapped[Cohort | None] = relationship(back_populates="states")
     submissions: Mapped[list["Submission"]] = relationship(

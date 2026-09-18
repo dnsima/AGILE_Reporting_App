@@ -100,7 +100,9 @@ def seed_states(db) -> int:
         state.cohort_id = cohort.id if cohort else None
         # States that have not begun reporting stay inactive, so they are not
         # counted as missing submissions.
-        state.is_active = _as_bool(row.get("is_reporting", "1"))
+        # Participating from the day it is named; reporting once it starts.
+        state.is_active = True
+        state.is_reporting = _as_bool(row.get("is_reporting", "1"))
     db.flush()
     return created
 

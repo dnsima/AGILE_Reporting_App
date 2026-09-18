@@ -473,7 +473,11 @@
       labelWidth: 170,
       reference: 100,
       referenceLabel: "target",
-      emptyMessage: "No approved data for this period yet.",
+      // Two different things leave this chart empty, and saying the wrong one
+      // sends someone looking for data that already arrived.
+      emptyMessage: (overview.cohorts || []).some((row) => row.states_reporting)
+        ? "Achievement needs approved state targets, and none are set for this period."
+        : "No state has submitted for this period yet.",
     });
 
     const status = overview.reporting_status;
@@ -1486,8 +1490,12 @@
       table(
         [
           { label: "Dimension", render: (r) => r.dimension.charAt(0) + r.dimension.slice(1).toLowerCase() },
-          { label: "Score", num: true, render: (r) => num(r.score) },
-          { label: "Grade", render: (r) => badge(r.grade) },
+          {
+            label: "Score",
+            num: true,
+            render: (r) => (r.score === null ? "not assessed" : num(r.score)),
+          },
+          { label: "Grade", render: (r) => (r.score === null ? "—" : badge(r.grade)) },
           { label: "Failed", key: "checks_failed", num: true },
         ],
         v.dimensions
@@ -1520,7 +1528,7 @@
       select.innerHTML = state.cohorts.map((c) => '<option value="' + c.code + '">' + c.name + "</option>").join("");
     } else {
       select.disabled = true;
-      select.innerHTML = '<option value="">36 states + FCT</option>';
+      select.innerHTML = '<option value="">All AGILE states</option>';
     }
   }
 
@@ -1574,6 +1582,7 @@
       category_codes: $("report-category").value ? [$("report-category").value] : null,
       formats: formats.length ? formats : ["markdown"],
       include_dqa: $("report-dqa").checked,
+      include_queries: $("report-queries").checked,
       include_trends: $("report-trends").checked,
       include_narratives: $("report-narratives").checked,
     };
@@ -1582,8 +1591,8 @@
       const report = await api.post("/reports", payload);
       setPanel(
         "report-result",
-        "<p><strong>" + report.title + "</strong></p>" +
-        "<p>" + (report.summary || "") + "</p>" +
+        "<p><strong>" + esc(report.title) + "</strong></p>" +
+        "<p>" + esc(report.summary || "") + "</p>" +
         "<p>" +
         report.artifacts
           .map(
@@ -1593,7 +1602,11 @@
           )
           .join(" ") +
         "</p>" +
-          (report.markdown ? '<div class="report-md">' + report.markdown.slice(0, 20000) + "</div>" : "")
+          // The preview is the report's own Markdown, shown as text in a
+          // preformatted block -- it is a document, not markup to run.
+          (report.markdown
+            ? '<div class="report-md">' + esc(report.markdown.slice(0, 20000)) + "</div>"
+            : "")
       );
       toast("Report generated.", "success");
       await renderReports();

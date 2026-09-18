@@ -100,6 +100,30 @@ def _persist_values(
     db.flush()
 
 
+def _mark_reporting(db: Session, state: State, actor: User | None) -> None:
+    """A participating state that files is, from that moment, a reporting one.
+
+    Done here rather than by hand, because the alternative is a state whose
+    return the platform accepts and analyses while leaving it out of every
+    national denominator -- which is what happened the first time a Limited
+    Financing state filed.
+    """
+    if state.is_reporting:
+        return
+    state.is_reporting = True
+    db.flush()
+    audit.record(
+        db,
+        action="state.reporting_started",
+        entity_type="state",
+        entity_id=state.id,
+        actor=actor,
+        state_id=state.id,
+        summary=f"{state.name} filed its first return and now counts as a reporting state.",
+        after={"is_reporting": True},
+    )
+
+
 def _finalise(
     db: Session,
     submission: Submission,
@@ -260,6 +284,7 @@ def ingest_upload(
     # Checked before the file is stored, so a refused upload leaves nothing on
     # disk to reconcile later.
     reopening = periods.assert_can_submit(db, state, period)
+    _mark_reporting(db, state, actor)
 
     version = _next_version(db, state.id, period.id)
     stored_path = _store_file(content, state, period, version, filename)
@@ -397,6 +422,7 @@ def ingest_manual(
         )
 
     reopening = periods.assert_can_submit(db, state, period)
+    _mark_reporting(db, state, actor)
 
     version = _next_version(db, state.id, period.id)
     submission = Submission(

@@ -81,6 +81,31 @@ every log line for that request.
 
 ## Reference data
 
+### Participating and reporting are two facts
+
+A state is **participating** (`is_active`) from the day it is named in the
+results framework: it is issued a template, it has an applicability matrix, it
+appears in the project's footprint. It is **reporting** (`is_reporting`) once
+it is expected to file returns.
+
+These were one column, and the Limited Financing states — named, with a reduced
+indicator set, not yet filing — were marked inactive. That let Delta file a
+return the platform accepted, validated and analysed while leaving it out of
+every national denominator it should have been counted in; the report claimed
+"National (18 AGILE states)" for a 21-state programme.
+
+* `reference.active_states()` — expected to file. The denominator for reporting
+  rates, DQA averages and `states_expected`. A participating state that has not
+  started is **not** counted as a non-reporter, because it was never asked.
+* `reference.participating_states()` — the programme's footprint, and what a
+  report's scope claims.
+
+Filing a return sets `is_reporting`, with an audit entry: a state whose return
+the platform accepts is, from that moment, a reporting state. Nobody has to
+remember to flip a flag.
+
+
+
 | Method | Path | Permission |
 |---|---|---|
 | `GET` | `/reference/cohorts` | `data:read` |
