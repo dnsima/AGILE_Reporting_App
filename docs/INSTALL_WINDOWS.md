@@ -71,6 +71,27 @@ script, run this once and try again:
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 ```
 
+The install step downloads about 40 MB, most of it numpy and pandas. On a slow
+or contended connection pip's 15-second default timeout gives up mid-download
+and ends in a long traceback finishing `ReadTimeoutError`. Nothing is broken and
+nothing is lost — whatever already came down is cached. Re-run with more
+patience:
+
+```powershell
+pip install --timeout 120 --retries 10 --prefer-binary -r requirements.txt
+```
+
+If it still stalls, take the two heavy packages on their own first, then the
+rest:
+
+```powershell
+pip install --timeout 180 --retries 10 numpy pandas
+pip install --timeout 180 --retries 10 -r requirements.txt
+```
+
+Both are safe to repeat as often as you need; pip skips anything already
+installed.
+
 ### 2. Configure
 
 ```powershell
@@ -139,6 +160,7 @@ point when the catalogue underneath it has changed.
 | `'git' is not recognized` | Use Route B, or install Git and reopen PowerShell |
 | `'python' is not recognized` | Python is not on PATH. Reinstall it and tick **Add python.exe to PATH** |
 | `cannot be loaded because running scripts is disabled` | Run the `Set-ExecutionPolicy` line above |
+| `ReadTimeoutError` from `files.pythonhosted.org` | The download stalled, not a failure. Re-run with `--timeout 120 --retries 10` |
 | `no such column: ...` | You are on old code against a new database, or the reverse. Re-pull, then `python -m scripts.seed` |
 | `Address already in use` | Something else holds port 8000. `uvicorn app.main:app --reload --port 8001` |
 | Indicators you do not recognise | The old catalogue is still in the database. `python -m scripts.seed --reset` |
