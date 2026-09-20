@@ -39,7 +39,7 @@ from app.models import (
     ValidationIssue,
     ValueRevision,
 )
-from app.services import audit
+from app.services import audit, disclosure
 
 logger = get_logger(__name__)
 
@@ -121,11 +121,15 @@ def raise_queries(
         opened.append(query)
         existing.add((issue.rule_code, issue.indicator_id))
 
-        # A figure the rules cannot use is quarantined rather than rejected:
-        # kept on record and visible, but out of every aggregation until settled.
-        if issue.is_blocking and value is not None:
-            value.is_valid = False
-            value.quarantine_reason = f"{issue.rule_code}: {(issue.message or '')[:180]}"
+        # A figure the rules cannot vouch for is labelled, not withdrawn: it
+        # still counts towards every total, and carries the reason wherever it
+        # is shown. Only a query resolution may change or clear it.
+        if value is not None:
+            reason = f"{issue.rule_code}: {(issue.message or '')[:180]}"
+            if issue.is_blocking:
+                disclosure.mark_unfit(value, reason)
+            else:
+                disclosure.mark_queried(value, reason)
 
     db.flush()
     _refresh_counts(db, submission)
@@ -412,10 +416,11 @@ def escalate_to_verification(
 
 
 def _release_quarantine(db: Session, query: DataQuery) -> None:
-    """Return the figure this query quarantined to the aggregations.
+    """Clear the flag this query put on a figure, now that it is settled.
 
-    Only if no other open query still holds it out: two rules can flag the same
-    figure, and settling one of them does not settle the other.
+    The figure was always counted; what changes here is what the platform says
+    about it. Only if no other open query still flags it: two rules can flag
+    the same figure, and settling one of them does not settle the other.
     """
     if query.submission_id is None or query.indicator_id is None:
         return
@@ -442,13 +447,12 @@ def _release_quarantine(db: Session, query: DataQuery) -> None:
     ]
     if others:
         logger.info(
-            "figure stays quarantined",
+            "figure stays flagged",
             extra={"query_id": query.id, "other_open_queries": [q.id for q in others]},
         )
         return
 
-    value.is_valid = True
-    value.quarantine_reason = None
+    disclosure.clear(value, corrected=bool(value.is_restated))
     db.flush()
 
 

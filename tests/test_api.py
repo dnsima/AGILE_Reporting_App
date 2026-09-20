@@ -281,8 +281,8 @@ class TestIngestion:
         assert response.status_code == 201
         assert response.json()["submission"]["state_code"] == "KN"
 
-    def test_an_unusable_figure_is_quarantined_not_rejected(self, client, npcu_headers):
-        """The bad figure leaves the analysis; the rest of the return still counts."""
+    def test_an_unusable_figure_is_flagged_not_rejected(self, client, npcu_headers):
+        """The bad figure is counted and labelled; the return is not refused."""
         bad = [row[:] for row in CLEAN_ROWS]
         bad[1][4] = 137.0  # a transition rate above 100%
 
@@ -294,13 +294,17 @@ class TestIngestion:
         assert body["submission"]["open_query_count"] >= 1
         assert any(issue["rule_code"] == "VAL-002" for issue in body["validation"]["issues"])
 
-        # The out-of-range figure is excluded from the national roll-up...
+        # The submission still reports nationally rather than vanishing from
+        # the roll-up: the platform reports what the state reported and
+        # discloses the doubt separately, instead of restating the national
+        # result on its own. (KPI-002 is a rate, so the national figure is
+        # recomputed from the numerator and denominator, 750/1000.)
         analysis = client.get(
             "/api/v1/analytics/indicators/KPI-002",
             headers=npcu_headers,
             params={"period": "2026-Q1"},
         ).json()
-        assert analysis["national"]["value"] is None
+        assert analysis["national"]["value"] == 75.0
 
         # ...while the sound figures in the same file still report.
         analysis = client.get(

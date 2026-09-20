@@ -377,6 +377,7 @@ def subset_within_parent(ctx: RuleContext) -> Iterator[Finding]:
                 field="value",
                 observed=f"{fmt(totals[child_code])}",
                 expected=f"<= {fmt(totals[parent_code])}",
+                context={"expected_value": totals[parent_code]},
             )
 
 
@@ -442,7 +443,11 @@ def composite_equals_parts(ctx: RuleContext) -> Iterator[Finding]:
                 field="value",
                 observed=f"{fmt(reported)}",
                 expected=f"{fmt(expected)}",
-                context={"parts": parts, "gap": round(reported - expected, 4)},
+                context={
+                    "parts": parts,
+                    "gap": round(reported - expected, 4),
+                    "expected_value": expected,
+                },
             )
 
 
@@ -762,7 +767,7 @@ def period_over_period_change(ctx: RuleContext) -> Iterator[Finding]:
                 observed=f"{fmt(effective)}",
                 expected=f"within {threshold:.0f}% of {fmt(previous)}",
                 source_row=value.source_row,
-                context={"change_pct": round(change, 1)},
+                context={"change_pct": round(change, 1), "expected_value": previous},
             )
 
 
@@ -790,6 +795,7 @@ def cumulative_monotonic(ctx: RuleContext) -> Iterator[Finding]:
                 observed=f"{fmt(effective)}",
                 expected=f">= {fmt(previous)}",
                 source_row=value.source_row,
+                context={"expected_value": previous},
             )
 
 

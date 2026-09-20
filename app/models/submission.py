@@ -20,7 +20,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.enums import SubmissionStatus, TargetLevel
+from app.core.enums import DisclosureStatus, SubmissionStatus, TargetLevel
 from app.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
@@ -68,12 +68,18 @@ class Submission(Base, TimestampMixin):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     #: How many figures in this submission are under query, and how many are
-    #: quarantined out of the aggregations.
+    #: marked unfit for use. Neither count removes anything from an aggregate.
     open_query_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     quarantined_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     dqa_score: Mapped[float | None] = mapped_column(Float, index=True)
     dqa_grade: Mapped[str | None] = mapped_column(String(24))
+    #: The headline a reader acts on. The DQA score measures how many checks
+    #: passed; this says whether the return can be used.
+    fitness_verdict: Mapped[str | None] = mapped_column(String(24), index=True)
+    #: Share of this state's reported volume, weighted by each figure's place
+    #: in the national total, that sits behind an unfit or queried figure.
+    exposed_share: Mapped[float | None] = mapped_column(Float)
     error_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     warning_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     #: Free-form parsing/mapping diagnostics kept for the audit trail.
@@ -94,6 +100,11 @@ class Submission(Base, TimestampMixin):
     dqa_scores: Mapped[list["DQAScore"]] = relationship(
         back_populates="submission", cascade="all, delete-orphan"
     )
+
+    @property
+    def unfit_count(self) -> int:
+        """Figures marked unfit for use. They still count towards the totals."""
+        return self.quarantined_count
 
     @property
     def is_analysable(self) -> bool:
@@ -134,9 +145,18 @@ class IndicatorValue(Base, TimestampMixin):
     data_source: Mapped[str | None] = mapped_column(String(255))
     comment: Mapped[str | None] = mapped_column(Text)
     source_row: Mapped[int | None] = mapped_column(Integer)
-    #: False quarantines the figure: it stays on record and is visible, but is
-    #: excluded from every aggregation until the query against it is settled.
+    #: False marks the figure unfit for use. It is NOT an exclusion: the figure
+    #: still counts towards every aggregate, because the NPCU reports what
+    #: states reported and discloses what it doubts. Removing a figure from a
+    #: total silently restates the national result, which is a decision for the
+    #: change-management process and not for a validation rule.
     is_valid: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    #: The fuller label behind ``is_valid``: CLEAN, QUERIED, UNFIT or CORRECTED.
+    #: Kept in step with it through ``services.disclosure.set_status``.
+    disclosure_status: Mapped[str] = mapped_column(
+        String(16), default=str(DisclosureStatus.CLEAN), nullable=False
+    )
+    #: Why the figure is flagged, shown wherever the figure is shown.
     quarantine_reason: Mapped[str | None] = mapped_column(String(255))
 
     submission: Mapped[Submission] = relationship(back_populates="values")

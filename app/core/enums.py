@@ -282,6 +282,44 @@ class ReportFormat(StrEnum):
     MARKDOWN = "markdown"
     HTML = "html"
     PDF = "pdf"
+    DOCX = "docx"
+
+
+class DisclosureStatus(StrEnum):
+    """What the platform is saying about a single reported figure.
+
+    None of these ever removes a figure from an aggregate. The NPCU reports
+    what states reported and discloses what it doubts; a figure changes only
+    through the change-management process, never because a rule decided so.
+    """
+
+    #: No open finding against it.
+    CLEAN = "CLEAN"
+    #: An open query, but nothing that makes the figure unusable on its face.
+    QUERIED = "QUERIED"
+    #: A blocking finding: the figure is counted, and marked unfit for use.
+    UNFIT = "UNFIT"
+    #: Changed through a query resolution. ``original_value`` keeps what was
+    #: first reported, so a published report still reconciles.
+    CORRECTED = "CORRECTED"
+
+
+#: Statuses that put a figure's contribution to the national total in doubt.
+EXPOSED_STATUSES = {DisclosureStatus.UNFIT, DisclosureStatus.QUERIED}
+
+
+class FitnessVerdict(StrEnum):
+    """The headline a reader should act on, in place of the DQA grade.
+
+    The DQA score answers "what share of checks passed?", which for any
+    plausible return is about 98. Readers take the headline as an answer to
+    "can I use this?", so that is what the headline now says.
+    """
+
+    FIT = "FIT"
+    FIT_WITH_NOTES = "FIT WITH NOTES"
+    NOT_FIT = "NOT FIT FOR USE"
+    NO_DATA = "NO DATA"
 
 
 #: Grade bands, strongest first.
@@ -312,6 +350,73 @@ CRITICAL_DIMENSION_THRESHOLD = 60.0
 #: the grade drops one band; below the second, two.
 USABLE_FIGURES_THRESHOLD = 90.0
 CRITICAL_USABLE_FIGURES_THRESHOLD = 75.0
+
+#: Share of a state's weight in the national totals that may sit behind
+#: doubted figures before the return itself is called unfit to use.
+NOT_FIT_EXPOSED_SHARE = 10.0
+
+
+def verdict_for_submission(
+    *,
+    score: float | None,
+    exposed_share: float | None,
+    material_findings: int,
+    open_findings: int,
+) -> FitnessVerdict:
+    """Say whether a return can be used, which is what a reader actually asks.
+
+    The DQA score is a pass rate over every check attempted, so it sits near
+    100 for any plausible return: Gombe scored 99.13 in Q2 2026 while reporting
+    127 schools where it had reported 5,960 the quarter before, an error large
+    enough to move the national figure by 89%. A reader who saw "Excellent"
+    would have had no way to know. The verdict answers the question the grade
+    was being read as answering.
+
+    Materiality decides, not the count of findings. One blocking finding whose
+    error is a rounding artefact leaves a return usable; one whose error moves
+    the national result does not.
+    """
+    if score is None:
+        return FitnessVerdict.NO_DATA
+    if material_findings > 0:
+        return FitnessVerdict.NOT_FIT
+    if exposed_share is not None and exposed_share >= NOT_FIT_EXPOSED_SHARE:
+        return FitnessVerdict.NOT_FIT
+    if open_findings > 0:
+        return FitnessVerdict.FIT_WITH_NOTES
+    return FitnessVerdict.FIT
+
+
+def verdict_note(
+    verdict: FitnessVerdict,
+    *,
+    exposed_share: float | None,
+    material_findings: int,
+    open_findings: int,
+) -> str | None:
+    """Say why the verdict is what it is. An unexplained verdict is worthless."""
+    if verdict is FitnessVerdict.NO_DATA:
+        return None
+    if verdict is FitnessVerdict.FIT:
+        return "No open findings against this return."
+    share = (
+        ""
+        if exposed_share is None
+        else f" {exposed_share:.1f}% of this state's contribution to the "
+        "national totals rests on them."
+    )
+    if verdict is FitnessVerdict.NOT_FIT:
+        if material_findings > 0:
+            return (
+                f"{material_findings} finding(s) large enough to move a national "
+                f"figure.{share} Every figure is still counted and shown; the "
+                "figures themselves must be reconciled with the SPIU."
+            )
+        return f"Findings against this return are material in aggregate.{share}"
+    return (
+        f"{open_findings} open finding(s), none large enough on its own to move "
+        f"a national figure.{share}"
+    )
 
 
 def grade_for_submission(

@@ -257,12 +257,17 @@ def readings_for_period(
     indicator_ids = [indicator.id for indicator in indicators]
     indicators_by_id = {indicator.id: indicator for indicator in indicators}
 
+    # Every reported figure counts, including the ones under query. Dropping a
+    # doubted figure here would silently restate the national result: on Q2
+    # 2026 it cut life-skills completion from the 373,529 states reported to
+    # 82,820, so the dashboard and the NPCU's own technical report disagreed by
+    # a factor of four with nothing on screen to say why. The doubt is
+    # disclosed through `services.exposure`, not applied to the arithmetic.
     grouped: dict[int, dict[int, list[IndicatorValue]]] = {}
     for row in db.scalars(
         select(IndicatorValue).where(
             IndicatorValue.submission_id.in_(list(submission_to_state)),
             IndicatorValue.indicator_id.in_(indicator_ids),
-            IndicatorValue.is_valid.is_(True),
         )
     ):
         state_id = submission_to_state[row.submission_id]

@@ -7,7 +7,7 @@ from itertools import count
 
 import pytest
 
-from app.core.enums import QueryResolution, QueryStatus, SubmissionStatus
+from app.core.enums import DisclosureStatus, QueryResolution, QueryStatus, SubmissionStatus
 from app.core.errors import ConflictError, ValidationError
 from app.models import Indicator, IndicatorValue, Submission, ValueRevision
 from app.services import analytics, queries, reference
@@ -98,22 +98,25 @@ class TestRaising:
         assert later.status != SubmissionStatus.REJECTED
         assert later.rejection_reason is None
 
-    def test_an_unusable_figure_is_quarantined_not_rejected(self, db):
+    def test_an_unusable_figure_is_flagged_not_rejected(self, db):
         _indicator_, _earlier, _later, value, _summary, _raised = _cumulative_fall(db)
         assert value.is_valid is False
+        assert value.disclosure_status == str(DisclosureStatus.UNFIT)
         assert "CON-002" in value.quarantine_reason
 
-    def test_quarantined_figures_leave_the_aggregation(self, db):
-        indicator, _earlier, later, value, _summary, _raised = _cumulative_fall(db)
+    def test_a_flagged_figure_still_counts_towards_the_total(self, db):
+        """Disclose the doubt; never restate the national result to hide it.
+
+        Dropping the figure here made the platform's own totals disagree with
+        the NPCU's published ones -- on Q2 2026, life-skills completion read
+        82,820 against the 373,529 states actually reported.
+        """
+        indicator, _earlier, _later, value, _summary, _raised = _cumulative_fall(db)
         period = reference.get_period_by_code(db, "2026-Q1")
 
         analytics.clear_analysis_cache(db)
-        assert analytics.analyse_indicator(db, indicator, period).national.value is None
-
-        value.is_valid = True
-        db.flush()
-        analytics.clear_analysis_cache(db)
         assert analytics.analyse_indicator(db, indicator, period).national.value == 342.0
+        assert value.is_valid is False  # counted, and still marked unfit
 
     def test_counts_are_recorded_on_the_submission(self, db):
         _i, _e, later, _v, _s, raised = _cumulative_fall(db)

@@ -28,7 +28,7 @@ from app.schemas.ingestion import (
     ManualSubmission,
 )
 from app.schemas.validation import ValidationSummary
-from app.services import audit, periods, queries, reference
+from app.services import audit, exposure, periods, queries, reference
 from app.services.ingestion.mapper import MappedValue, map_rows
 from app.services.ingestion.parser import parse_upload
 from app.services.validation import run_validation
@@ -592,6 +592,8 @@ def revalidate_period(
         findings += summary.error_count + summary.warning_count
         raised += len(queries.raise_queries(db, submission, actor=actor))
 
+    verdicts = exposure.apply_verdicts(db, period)
+
     audit.record(
         db,
         action="period.revalidate",
@@ -605,7 +607,12 @@ def revalidate_period(
         ),
     )
     event_bus.publish("period.revalidated", {"period": period.code, "queries": raised})
-    return {"submissions": len(submissions), "findings": findings, "queries_raised": raised}
+    return {
+        "submissions": len(submissions),
+        "findings": findings,
+        "queries_raised": raised,
+        "verdicts": verdicts,
+    }
 
 
 def revalidate_submission(db: Session, submission: Submission, actor: User | None) -> ValidationSummary:
