@@ -49,7 +49,12 @@ def _next_version(db: Session, state_id: int, period_id: int) -> int:
 
 
 def _supersede_previous(db: Session, state_id: int, period_id: int, keep_id: int | None) -> int:
-    """Retire earlier current submissions so exactly one stays authoritative."""
+    """Retire earlier current submissions so exactly one stays authoritative.
+
+    Open queries follow the figure onto the replacement rather than dying with
+    the return they were raised against: a fresh upload is not a resolution,
+    and a state cannot clear a finding by re-submitting over it.
+    """
     stmt = select(Submission).where(
         Submission.state_id == state_id,
         Submission.period_id == period_id,
@@ -57,11 +62,15 @@ def _supersede_previous(db: Session, state_id: int, period_id: int, keep_id: int
     )
     if keep_id is not None:
         stmt = stmt.where(Submission.id != keep_id)
+    current = db.get(Submission, keep_id) if keep_id is not None else None
+
     retired = 0
     for previous in db.scalars(stmt):
         previous.is_current = False
         if previous.status == SubmissionStatus.APPROVED:
             previous.status = str(SubmissionStatus.SUPERSEDED)
+        if current is not None:
+            queries.carry_forward(db, previous, current)
         retired += 1
     db.flush()
     return retired

@@ -153,6 +153,74 @@ def raise_queries(
     return opened
 
 
+def carry_forward(db: Session, previous: Submission, current: Submission) -> int:
+    """Move a superseded return's open queries onto the one replacing it.
+
+    A finding is not settled by being re-uploaded over. If a state re-submits
+    while a query is open, the query follows the figure onto the new return and
+    stays open until the NPCU resolves it -- which is the point of putting
+    corrections through the change-management process rather than letting a
+    fresh file quietly wipe the record.
+
+    Re-validation of the new return may well raise the same finding again;
+    ``raise_queries`` refuses to duplicate one that is already open, so the
+    carried query is the one that survives, with its response history intact.
+    """
+    open_queries = [
+        query
+        for query in db.scalars(
+            select(DataQuery).where(DataQuery.submission_id == previous.id)
+        )
+        if query.is_open
+    ]
+    if not open_queries:
+        return 0
+
+    values = {
+        value.indicator_id: value
+        for value in db.scalars(
+            select(IndicatorValue).where(IndicatorValue.submission_id == current.id)
+        )
+    }
+
+    carried = 0
+    for query in open_queries:
+        query.submission_id = current.id
+        carried += 1
+        value = values.get(query.indicator_id) if query.indicator_id else None
+        if value is None:
+            continue
+        reason = f"{query.rule_code or 'QUERY'}: carried forward from v{previous.version}"
+        was_blocking = query.severity == str(Severity.ERROR)
+        if was_blocking:
+            disclosure.mark_unfit(value, reason)
+        else:
+            disclosure.mark_queried(value, reason)
+
+    db.flush()
+    _refresh_counts(db, current)
+    _refresh_counts(db, previous)
+
+    audit.record(
+        db,
+        action="query.carry_forward",
+        entity_type="submission",
+        entity_id=current.id,
+        state_id=current.state_id,
+        period_id=current.period_id,
+        summary=(
+            f"Carried {carried} open quer(ies) from submission #{previous.id} "
+            f"(v{previous.version}) onto #{current.id} (v{current.version}). "
+            "A re-upload does not clear an open finding."
+        ),
+    )
+    logger.info(
+        "queries carried forward",
+        extra={"from": previous.id, "to": current.id, "count": carried},
+    )
+    return carried
+
+
 def _refresh_counts(db: Session, submission: Submission) -> None:
     open_queries = db.scalar(
         select(func.count(DataQuery.id)).where(

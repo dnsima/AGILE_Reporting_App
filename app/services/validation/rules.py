@@ -26,10 +26,42 @@ from app.models import Indicator, IndicatorValue, ReportingPeriod, State, Submis
 from app.services.reconciliation import ReconciliationLine
 
 #: Parent -> child indicator codes whose totals must not be exceeded.
+#: ``child -> parent``: a figure that cannot exceed the one it is drawn from.
+#: Declared on the 53-indicator framework in force from Q2 2026. The previous
+#: table still named KPI-024/032/001, which the recode retired, so the rule
+#: matched nothing at all and Plateau's 690 schools on School Improvement
+#: Grants passed unremarked against 609 public schools in the state.
 SUBSET_RELATIONSHIPS: dict[str, str] = {
-    "KPI-025": "KPI-024",  # female teachers recruited <= teachers recruited
-    "KPI-033": "KPI-032",  # functional safe spaces <= safe spaces established
-    "KPI-007": "KPI-001",  # girls receiving CCT <= girls benefiting
+    # Component 1: what is funded or equipped cannot exceed what exists.
+    "C1.2-05": "PDO-10",   # schools receiving SIG <= public schools
+    "C1.0-05": "PDO-10",   # schools with CoC and GBV/SEA (WSA) <= public schools
+    "C3.0-03": "PDO-10",   # schools running climate awareness <= public schools
+    # PDO: passing cannot exceed attempting.
+    "PDO-14": "PDO-13",    # passing Junior WAEC/BECE <= attempting
+    "PDO-16": "PDO-15",    # passing Senior WAEC/NECO <= attempting
+    # Girls are a subset of students, and completion a subset of participation.
+    "PDO-03": "PDO-01",    # girls benefiting <= students benefiting
+    "PDO-02": "PDO-01",    # boys benefiting <= students benefiting
+    "C2.2a-02": "C2.2a-01",  # completing life skills <= participating
+    "C2.2b-04": "C2.2b-03",  # girls in digital skills <= students in digital skills
+    "C2.2b-05": "C2.2b-04",  # girls demonstrating <= girls participating
+}
+
+#: ``total -> parts``: a figure that must equal the sum of the others, beyond
+#: the composites the catalogue already declares. Yobe's Q2 return reported
+#: 90,400 girls and 102,744 boys against a total of 357,061 -- a gap of
+#: 163,917 that no rule was looking for.
+IDENTITY_RELATIONSHIPS: dict[str, tuple[str, ...]] = {
+    "PDO-01": ("PDO-02", "PDO-03"),  # students = boys + girls
+    "PDO-04": ("PDO-05", "PDO-06"),  # girls JS1-SS3 = girls JS1-JS3 + girls SS1-SS3
+}
+
+#: Indicators that measure different things and so should not match exactly in
+#: every state. The Q2 2026 technical report found the social safety net count
+#: identical to the total scholarship count in all eighteen states, which means
+#: states are filling the same number into both fields.
+DISTINCT_RELATIONSHIPS: dict[str, tuple[str, ...]] = {
+    "C2.3-06": ("C2.3-02", "C2.3-03", "C2.3-04", "C2.3-05"),
 }
 
 ALLOWED_DISAGGREGATIONS: dict[str, set[str]] = {
@@ -452,6 +484,135 @@ def composite_equals_parts(ctx: RuleContext) -> Iterator[Finding]:
 
 
 @rule(
+    "INT-006",
+    "Declared totals equal the sum of their declared parts",
+    DQADimension.INTEGRITY,
+    severity=Severity.ERROR,
+    blocking=True,
+    description=(
+        "Identities the results framework asserts but the catalogue does not "
+        "carry as composites, such as students benefiting equalling boys plus "
+        "girls benefiting."
+    ),
+    config={"tolerance": 0.5},
+    weight=lambda ctx: len(IDENTITY_RELATIONSHIPS),
+)
+def declared_identity_holds(ctx: RuleContext) -> Iterator[Finding]:
+    tolerance = float(ctx.config("INT-006", "tolerance", 0.5))
+    totals: dict[str, float] = {}
+    indicator_by_code: dict[str, Indicator] = {}
+    for _value, indicator, effective in _numeric_values(ctx):
+        totals[indicator.code] = totals.get(indicator.code, 0.0) + effective
+        indicator_by_code[indicator.code] = indicator
+
+    for total_code, part_codes in IDENTITY_RELATIONSHIPS.items():
+        if total_code not in totals:
+            continue
+        if any(part not in totals for part in part_codes):
+            continue  # a part is unreported; completeness covers that
+        expected = sum(totals[part] for part in part_codes)
+        reported = totals[total_code]
+        if abs(reported - expected) <= tolerance:
+            continue
+        yield Finding(
+            message=(
+                f"{total_code} reports {fmt(reported)} but "
+                f"{' + '.join(part_codes)} sum to {fmt(expected)}, a gap of "
+                f"{reported - expected:+,.0f}."
+            ),
+            indicator_id=indicator_by_code[total_code].id,
+            indicator_code=total_code,
+            field="value",
+            observed=f"{fmt(reported)}",
+            expected=f"{fmt(expected)}",
+            context={
+                "parts": list(part_codes),
+                "gap": round(reported - expected, 4),
+                "expected_value": expected,
+            },
+        )
+
+
+@rule(
+    "INT-007",
+    "Indicators measuring different things do not report identical figures",
+    DQADimension.INTEGRITY,
+    severity=Severity.WARNING,
+    description=(
+        "Two indicators with different definitions and different targets "
+        "matching to the digit usually means one field was copied into the "
+        "other rather than measured."
+    ),
+    weight=lambda ctx: len(DISTINCT_RELATIONSHIPS),
+)
+def distinct_indicators_differ(ctx: RuleContext) -> Iterator[Finding]:
+    totals: dict[str, float] = {}
+    indicator_by_code: dict[str, Indicator] = {}
+    for _value, indicator, effective in _numeric_values(ctx):
+        totals[indicator.code] = totals.get(indicator.code, 0.0) + effective
+        indicator_by_code[indicator.code] = indicator
+
+    for code, others in DISTINCT_RELATIONSHIPS.items():
+        if code not in totals or not totals[code]:
+            continue
+        if any(other not in totals for other in others):
+            continue
+        comparison = sum(totals[other] for other in others)
+        if not comparison or abs(totals[code] - comparison) > 0.5:
+            continue
+        yield Finding(
+            message=(
+                f"{code} reports {fmt(totals[code])}, exactly the sum of "
+                f"{' + '.join(others)}. They measure different things and "
+                "carry different targets, so an exact match suggests one "
+                "figure was entered into both."
+            ),
+            indicator_id=indicator_by_code[code].id,
+            indicator_code=code,
+            field="value",
+            observed=f"{fmt(totals[code])}",
+            expected=f"a figure measured independently of {' + '.join(others)}",
+        )
+
+
+@rule(
+    "COM-003",
+    "A figure is not zero where the state reported activity before",
+    DQADimension.COMPLETENESS,
+    severity=Severity.WARNING,
+    description=(
+        "Zero where substantial activity was reported in the previous period "
+        "is far more often a cell nobody filled in than a programme that "
+        "stopped."
+    ),
+    config={"floor": 1.0},
+    weight=_sized(_values_with_previous),
+)
+def zero_after_activity(ctx: RuleContext) -> Iterator[Finding]:
+    """Adamawa reported 407 schools on climate awareness in Q1, and 0 in Q2."""
+    floor = float(ctx.config("COM-003", "floor", 1.0))
+    for value, indicator, effective in _values_with_previous(ctx):
+        previous = ctx.previous_values[indicator.id]
+        if effective != 0 or previous < floor:
+            continue
+        yield Finding(
+            message=(
+                f"{indicator.code} is zero this period after {fmt(previous)} "
+                "was reported last period. Confirm whether the activity "
+                "genuinely ceased or the figure was not entered."
+            ),
+            indicator_id=indicator.id,
+            indicator_code=indicator.code,
+            field="value",
+            observed="0",
+            expected=f"a figure, or confirmation that it is genuinely zero "
+            f"after {fmt(previous)}",
+            source_row=value.source_row,
+            context={"expected_value": previous},
+        )
+
+
+@rule(
     "APP-001",
     "Figures are only reported where the state implements",
     DQADimension.VALIDITY,
@@ -743,19 +904,36 @@ def components_supplied(ctx: RuleContext) -> Iterator[Finding]:
     DQADimension.CONSISTENCY,
     severity=Severity.WARNING,
     description="Very large swings between consecutive periods are flagged for verification.",
-    config={"threshold_pct": 200.0},
+    config={"threshold_pct": 200.0, "drop_threshold_pct": 50.0},
     weight=_sized(_values_with_previous),
 )
 def period_over_period_change(ctx: RuleContext) -> Iterator[Finding]:
+    """Rises and falls need separate bands, because a fall cannot exceed 100%.
+
+    Measuring both against one 200% threshold meant no decrease was detectable
+    at all: a figure collapsing to zero registers 100% and passed. Yobe's
+    social safety net falling 79% between Q1 and Q2 2026, and Adamawa's 77%,
+    both went unflagged for exactly this reason.
+
+    Falls on cumulative indicators are left to CON-002, which calls them the
+    impossibility they are rather than merely a large movement.
+    """
     threshold = float(
         ctx.config("CON-001", "threshold_pct", ctx.settings.consistency_change_threshold_pct)
     )
+    drop_threshold = float(ctx.config("CON-001", "drop_threshold_pct", 50.0))
     for value, indicator, effective in _values_with_previous(ctx):
         previous = ctx.previous_values[indicator.id]
         if previous == 0:
             continue
         change = abs(effective - previous) / abs(previous) * 100.0
-        if change > threshold:
+        if effective < previous:
+            if indicator.is_cumulative:
+                continue  # CON-002 owns this, and puts it far more strongly
+            band = drop_threshold
+        else:
+            band = threshold
+        if change > band:
             yield Finding(
                 message=(
                     f"{indicator.code}: changed {change:.0f}% from the previous period "
@@ -765,7 +943,7 @@ def period_over_period_change(ctx: RuleContext) -> Iterator[Finding]:
                 indicator_code=indicator.code,
                 field="value",
                 observed=f"{fmt(effective)}",
-                expected=f"within {threshold:.0f}% of {fmt(previous)}",
+                expected=f"within {band:.0f}% of {fmt(previous)}",
                 source_row=value.source_row,
                 context={"change_pct": round(change, 1), "expected_value": previous},
             )

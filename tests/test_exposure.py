@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from itertools import count
 
 import pytest
+from sqlalchemy import select
 
 from app.core.enums import (
     DisclosureStatus,
@@ -18,7 +19,7 @@ from app.core.enums import (
     SubmissionStatus,
     verdict_for_submission,
 )
-from app.models import Indicator, IndicatorValue, Submission
+from app.models import DataQuery, Indicator, IndicatorValue, Submission
 from app.services import analytics, exposure, queries, reference
 from app.services.validation import run_validation
 
@@ -193,3 +194,67 @@ class TestVerdict:
         revalidate_period(db, period)
         assert later.fitness_verdict == str(FitnessVerdict.NOT_FIT)
         assert later.exposed_share > 0
+
+
+class TestChangeManagement:
+    """A re-upload is not a resolution."""
+
+    def test_an_open_query_follows_the_figure_onto_a_new_submission(self, db, collapse):
+        from app.services.ingestion.pipeline import _supersede_previous
+
+        indicator, _flagged, later = collapse
+        state_id, period_id = later.state_id, later.period_id
+        opened = [
+            q
+            for q in db.scalars(
+                select(DataQuery).where(DataQuery.submission_id == later.id)
+            )
+        ]
+        assert opened, "the fixture should have raised a query"
+
+        replacement = Submission(
+            state_id=state_id,
+            period_id=period_id,
+            version=later.version + 1,
+            status=str(SubmissionStatus.APPROVED),
+            is_current=True,
+            uploaded_at=datetime.now(timezone.utc),
+        )
+        db.add(replacement)
+        db.flush()
+        # The state re-submits the very same wrong figure.
+        resubmitted = _value(db, replacement, indicator, 127)
+
+        _supersede_previous(db, state_id, period_id, keep_id=replacement.id)
+
+        carried = [
+            q
+            for q in db.scalars(
+                select(DataQuery).where(DataQuery.submission_id == replacement.id)
+            )
+        ]
+        assert len(carried) == len(opened)
+        assert all(q.is_open for q in carried)
+        assert resubmitted.is_valid is False
+        assert resubmitted.disclosure_status == str(DisclosureStatus.UNFIT)
+
+    def test_the_superseded_return_keeps_no_open_queries(self, db, collapse):
+        from app.services.ingestion.pipeline import _supersede_previous
+
+        indicator, _flagged, later = collapse
+        replacement = Submission(
+            state_id=later.state_id,
+            period_id=later.period_id,
+            version=later.version + 1,
+            status=str(SubmissionStatus.APPROVED),
+            is_current=True,
+            uploaded_at=datetime.now(timezone.utc),
+        )
+        db.add(replacement)
+        db.flush()
+        _value(db, replacement, indicator, 127)
+        _supersede_previous(db, later.state_id, later.period_id, keep_id=replacement.id)
+
+        db.refresh(later)
+        assert later.open_query_count == 0
+        assert replacement.open_query_count > 0

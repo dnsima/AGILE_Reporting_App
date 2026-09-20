@@ -260,3 +260,108 @@ class TestProvisionalBaseline:
         assert finding, "cumulative fall missed because the baseline was rejected"
         assert "1,577" in finding[0].message and "342" in finding[0].message
         assert "did not pass validation" in finding[0].message
+
+
+class TestDeclaredIdentities:
+    """INT-006: identities the framework asserts but the catalogue does not.
+
+    Yobe's Q2 2026 return reported 90,400 girls and 102,744 boys against a
+    total of 357,061. Nothing was looking for the 163,917 gap.
+    """
+
+    def _beneficiary_block(self, db, students, boys, girls):
+        for code in ("PDO-01", "PDO-02", "PDO-03"):
+            if not db.query(Indicator).filter_by(code=code).first():
+                _indicator(db, code)
+        submission = _submission(db)
+        for code, amount in (
+            ("PDO-01", students),
+            ("PDO-02", boys),
+            ("PDO-03", girls),
+        ):
+            _value(db, submission, db.query(Indicator).filter_by(code=code).one(), amount)
+        return run_validation(db, submission)
+
+    def test_a_gap_between_the_total_and_its_parts_is_an_error(self, db):
+        summary = self._beneficiary_block(db, 357_061, 102_744, 90_400)
+        found = _issues(summary, "INT-006")
+        assert len(found) == 1
+        assert "163,917" in found[0].message
+        assert found[0].severity == "ERROR"
+
+    def test_a_total_matching_its_parts_passes(self, db):
+        summary = self._beneficiary_block(db, 193_144, 102_744, 90_400)
+        assert _issues(summary, "INT-006") == []
+
+
+class TestDistinctIndicators:
+    """INT-007: two differently-defined indicators matching to the digit."""
+
+    def test_a_safety_net_equal_to_the_scholarship_total_is_flagged(self, db):
+        for code in ("C2.3-02", "C2.3-03", "C2.3-04", "C2.3-05", "C2.3-06"):
+            if not db.query(Indicator).filter_by(code=code).first():
+                _indicator(db, code)
+        submission = _submission(db)
+        parts = {"C2.3-02": 100.0, "C2.3-03": 200.0, "C2.3-04": 300.0, "C2.3-05": 400.0}
+        for code, amount in parts.items():
+            _value(db, submission, db.query(Indicator).filter_by(code=code).one(), amount)
+        _value(db, submission, db.query(Indicator).filter_by(code="C2.3-06").one(), 1_000.0)
+
+        found = _issues(run_validation(db, submission), "INT-007")
+        assert len(found) == 1
+        assert "exactly the sum" in found[0].message
+
+
+class TestZeroAfterActivity:
+    """COM-003: Adamawa reported 407 climate schools in Q1 and 0 in Q2."""
+
+    def test_zero_after_a_reported_figure_is_queried(self, db):
+        indicator = _indicator(db, "ZAA-01")
+        earlier = _submission(db, period="2025-Q4")
+        _value(db, earlier, indicator, 407)
+        later = _submission(db, period="2026-Q1")
+        _value(db, later, indicator, 0)
+
+        found = _issues(run_validation(db, later), "COM-003")
+        assert len(found) == 1
+        assert "407" in found[0].message
+
+    def test_zero_after_zero_is_not_a_finding(self, db):
+        indicator = _indicator(db, "ZAA-02")
+        earlier = _submission(db, period="2025-Q4")
+        _value(db, earlier, indicator, 0)
+        later = _submission(db, period="2026-Q1")
+        _value(db, later, indicator, 0)
+
+        assert _issues(run_validation(db, later), "COM-003") == []
+
+
+class TestFallsAreDetectable:
+    """CON-001 measured rises and falls against one 200% band.
+
+    A fall cannot exceed 100%, so no decrease was detectable at all.
+    """
+
+    def _fall(self, db, code, before, after, cumulative):
+        indicator = _indicator(db, code, is_cumulative=cumulative)
+        earlier = _submission(db, period="2025-Q4")
+        _value(db, earlier, indicator, before)
+        later = _submission(db, period="2026-Q1")
+        _value(db, later, indicator, after)
+        return run_validation(db, later)
+
+    def test_a_large_fall_on_a_stock_indicator_is_flagged(self, db):
+        summary = self._fall(db, "FALL-01", 323_372, 68_297, cumulative=False)
+        found = _issues(summary, "CON-001")
+        assert len(found) == 1
+        assert "79%" in found[0].message
+
+    def test_a_modest_fall_is_left_alone(self, db):
+        summary = self._fall(db, "FALL-02", 1_000, 800, cumulative=False)
+        assert _issues(summary, "CON-001") == []
+
+    def test_a_cumulative_fall_is_left_to_the_rule_that_forbids_it(self, db):
+        """CON-002 calls it impossible; CON-001 should not also call it large."""
+        summary = self._fall(db, "FALL-03", 5_960, 127, cumulative=True)
+        assert _issues(summary, "CON-001") == []
+        assert len(_issues(summary, "CON-002")) == 1
