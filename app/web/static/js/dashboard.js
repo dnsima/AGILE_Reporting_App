@@ -700,22 +700,39 @@
   // -- data quality ---------------------------------------------------------
   async function renderQuality() {
     const [summary, heat] = await Promise.all([
-      api.get("/quality/national", { period: state.period }),
+      api.get("/quality/national", {
+        period: state.period,
+        state: state.stateCode || undefined,
+      }),
       api.get("/dashboard/dqa-heatmap", { periods: 6, period_type: selectedPeriodType() }),
     ]);
 
+    const scoped = Boolean(state.stateCode);
+    $("dqa-panel-title").textContent = scoped
+      ? "Data quality — " + (summary.scorecards[0] || {}).state_name
+      : "National DQA summary";
     $("dqa-caption").textContent =
       summary.states_reported + " of " + summary.states_expected + " states assessed";
     $("dqa-summary").innerHTML =
       '<div class="kv">' +
-      "<div><dt>National score</dt><dd>" + num(summary.national_score) + "</dd></div>" +
+      // The verdict leads. The score says how many checks passed, which is a
+      // different question and was being read as the answer to this one.
+      '<div><dt>Fit for use</dt><dd>' +
+      (scoped
+        ? badge((summary.scorecards[0] || {}).fitness_verdict || "No data")
+        : summary.states_not_fit + " of " + summary.states_reported + " not fit") +
+      "</dd></div>" +
+      "<div><dt>" + (scoped ? "DQA score" : "National score") + "</dt><dd>" +
+      num(summary.national_score) + "</dd></div>" +
       "<div><dt>Grade</dt><dd>" + badge(summary.grade) + "</dd></div>" +
-      "<div><dt>Figures counting</dt><dd>" + pct(summary.usable_share_pct) +
+      // Not "figures counting": every figure counts towards the totals now.
+      // What varies is how many carry an open finding.
+      "<div><dt>Figures unencumbered</dt><dd>" + pct(summary.usable_share_pct) +
       '<span style="display:block;font-size:.72rem;font-weight:400;color:var(--text-muted)">' +
-      summary.figures_counting + " of " + summary.figures_reported + "</span></dd></div>" +
+      summary.figures_counting + " of " + summary.figures_reported +
+      " carry no open finding</span></dd></div>" +
       "<div><dt>Reporting rate</dt><dd>" + pct(summary.reporting_rate_pct) + "</dd></div>" +
       "<div><dt>On-time rate</dt><dd>" + pct(summary.on_time_rate_pct) + "</dd></div>" +
-      "<div><dt>Cleared for analysis</dt><dd>" + summary.states_approved + "</dd></div>" +
       "</div>" +
       table(
         [
@@ -741,16 +758,19 @@
         { label: "State", key: "state_name" },
         { label: "Cohort", key: "cohort_code" },
         { label: "Status", render: (r) => badge(r.status) },
+        {
+          label: "Fit for use",
+          render: (r) => badge(r.fitness_verdict || "No data"),
+        },
         { label: "Score", num: true, render: (r) => num(r.overall_score) },
         { label: "Grade", render: (r) => badge(r.grade) },
         {
-          label: "Figures counting",
+          label: "In doubt",
           num: true,
           render: (r) =>
-            r.figures_reported
-              ? r.figures_counting + " of " + r.figures_reported +
-                " (" + Math.round(r.usable_share_pct) + "%)"
-              : "—",
+            r.exposed_share_pct === null || r.exposed_share_pct === undefined
+              ? "—"
+              : num(r.exposed_share_pct, 1) + "%",
         },
         { label: "Errors", key: "error_count", num: true },
         { label: "Warnings", key: "warning_count", num: true },
@@ -797,7 +817,10 @@
   async function renderReconciliation() {
     let report;
     try {
-      report = await api.get("/reconciliation", { period: state.period });
+      report = await api.get("/reconciliation", {
+        period: state.period,
+        state: state.stateCode || undefined,
+      });
     } catch (error) {
       // Reconciliation only makes sense for a period that decomposes.
       $("reconciliation-summary").innerHTML =

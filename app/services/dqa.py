@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.enums import (
     DQADimension,
+    FitnessVerdict,
     Severity,
     SubmissionStatus,
     grade_for_score,
@@ -144,6 +145,8 @@ def state_scorecard(db: Session, state: State, period: ReportingPeriod) -> DQASc
         figures_reported=len(values),
         figures_counting=counting,
         usable_share_pct=None if usable_share is None else round(usable_share, 1),
+        fitness_verdict=submission.fitness_verdict,
+        exposed_share_pct=submission.exposed_share,
         grade_note=grade_note(
             submission.dqa_score,
             [row.score for row in dimensions if row.score is not None],
@@ -222,9 +225,19 @@ def cohort_summary(
     )
 
 
-def national_summary(db: Session, period: ReportingPeriod) -> NationalDQASummary:
-    """Consolidated national DQA summary for one reporting period."""
-    states = reference.active_states(db)
+def national_summary(
+    db: Session, period: ReportingPeriod, *, state_code: str | None = None
+) -> NationalDQASummary:
+    """Consolidated DQA summary for a period, or for one state within it.
+
+    The state filter reaches here because the data-quality board ignored it
+    entirely: choosing Bauchi still showed "18 of 18 states assessed" and the
+    national score, which is the opposite of what the filter promised.
+    """
+    if state_code:
+        states = [reference.get_state_by_code(db, state_code)]
+    else:
+        states = reference.active_states(db)
     scorecards = [state_scorecard(db, state, period) for state in states]
 
     submitted = [card for card in scorecards if card.submission_id is not None]
@@ -294,6 +307,11 @@ def national_summary(db: Session, period: ReportingPeriod) -> NationalDQASummary
         figures_reported=figures_reported,
         figures_counting=figures_counting,
         usable_share_pct=None if national_usable is None else round(national_usable, 1),
+        states_not_fit=sum(
+            1
+            for card in submitted
+            if card.fitness_verdict == str(FitnessVerdict.NOT_FIT)
+        ),
         grade_note=grade_note(
             national_score,
             [row.score for row in dimension_averages if row.score is not None],

@@ -378,3 +378,58 @@ class TestReportingPeriodTypes:
         types = {p.period_type for p in made}
         assert types == {str(PeriodType.MONTHLY), str(PeriodType.QUARTERLY)}
         assert len(made) == 16
+
+
+class TestEveryBoardHonoursTheStateFilter:
+    """Twice now a filter has been wired to nothing and shipped.
+
+    The overview ignored it, then the data-quality board ignored it, and both
+    times the page looked identical whichever state was chosen. These assert
+    the contract rather than one call site.
+    """
+
+    def test_the_quality_board_scopes_to_the_state(self, db, collapse):
+        from app.services import dqa
+        from app.services.ingestion.pipeline import revalidate_period
+
+        period = reference.get_period_by_code(db, "2026-Q1")
+        revalidate_period(db, period)
+
+        national = dqa.national_summary(db, period)
+        scoped = dqa.national_summary(db, period, state_code="KD")
+
+        assert national.states_reported > scoped.states_reported
+        assert scoped.states_reported == 1
+        assert scoped.scorecards[0].state_code == "KD"
+
+    def test_the_scorecard_carries_the_verdict(self, db, collapse):
+        from app.services import dqa
+        from app.services.ingestion.pipeline import revalidate_period
+
+        period = reference.get_period_by_code(db, "2026-Q1")
+        revalidate_period(db, period)
+        scoped = dqa.national_summary(db, period, state_code="KN")
+        card = scoped.scorecards[0]
+        assert card.fitness_verdict == str(FitnessVerdict.NOT_FIT)
+        assert card.exposed_share_pct is not None
+
+    def test_the_national_board_counts_states_that_are_not_fit(self, db, collapse):
+        from app.services import dqa
+        from app.services.ingestion.pipeline import revalidate_period
+
+        period = reference.get_period_by_code(db, "2026-Q1")
+        revalidate_period(db, period)
+        assert dqa.national_summary(db, period).states_not_fit >= 1
+
+    def test_two_states_do_not_produce_the_same_board(self, db, collapse):
+        """The complaint that started this: every state looked identical."""
+        from app.services import dqa
+        from app.services.ingestion.pipeline import revalidate_period
+
+        period = reference.get_period_by_code(db, "2026-Q1")
+        revalidate_period(db, period)
+
+        flagged = dqa.national_summary(db, period, state_code="KN").scorecards[0]
+        sound = dqa.national_summary(db, period, state_code="KD").scorecards[0]
+        assert flagged.fitness_verdict != sound.fitness_verdict
+        assert flagged.exposed_share_pct != sound.exposed_share_pct

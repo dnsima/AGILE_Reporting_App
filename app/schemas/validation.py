@@ -70,9 +70,16 @@ class DQAScorecard(BaseModel):
     overall_score: float | None = None
     grade: str = "No data"
     figures_reported: int = 0
-    #: Figures not held out of the national totals by an open query.
+    #: Figures with no open finding against them. Every figure counts towards
+    #: the national totals regardless; this says how many are unencumbered.
     figures_counting: int = 0
     usable_share_pct: float | None = None
+    #: Whether the return can be relied on: FIT, FIT WITH NOTES, NOT FIT FOR
+    #: USE. This, not the grade, is what a reader should act on.
+    fitness_verdict: str | None = None
+    #: Share of this state's contribution to the national totals that rests on
+    #: figures the validation could not vouch for.
+    exposed_share_pct: float | None = None
     grade_note: str | None = None
     dimensions: list[DimensionScore] = Field(default_factory=list)
     error_count: int = 0
@@ -91,6 +98,8 @@ class NationalDQASummary(BaseModel):
     figures_reported: int = 0
     figures_counting: int = 0
     usable_share_pct: float | None = None
+    #: How many of the assessed states cannot be relied on for this period.
+    states_not_fit: int = 0
     grade_note: str | None = None
     grade: str = "No data"
     dimension_averages: list[DimensionScore] = Field(default_factory=list)

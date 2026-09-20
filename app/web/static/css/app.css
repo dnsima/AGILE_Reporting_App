@@ -141,6 +141,11 @@ body {
 .tile.not-fit-for-use .value { color: var(--bad); }
 .tile.no-data { border-left-color: var(--muted, #888); }
 
+/* The same verdicts as badges, in tables and key-value panels. */
+.badge.fit { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
+.badge.fit-with-notes { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+.badge.not-fit-for-use { background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--bad); font-weight: 600; }
+
 /* --------------------------------------------------------------- tables -- */
 table { border-collapse: collapse; width: 100%; font-size: .82rem; }
 th, td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }

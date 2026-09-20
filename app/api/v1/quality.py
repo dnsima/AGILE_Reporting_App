@@ -5,7 +5,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 
-from app.api.deps import CurrentPrincipal, DbSession, enforce_state_scope, require
+from app.api.deps import (
+    CurrentPrincipal,
+    DbSession,
+    enforce_state_scope,
+    require,
+    visible_state_codes,
+)
 from app.core.enums import Permission
 from app.core.errors import NotFoundError
 from app.models import ValidationRule
@@ -53,9 +59,17 @@ def state_scorecard(
     dependencies=[Depends(require(Permission.DATA_READ))],
 )
 def national(
-    db: DbSession, principal: CurrentPrincipal, period: str | None = None
+    db: DbSession,
+    principal: CurrentPrincipal,
+    period: str | None = None,
+    state: str | None = None,
 ) -> NationalDQASummary:
-    return dqa.national_summary(db, _resolve_period(db, period))
+    if state:
+        enforce_state_scope(db, principal, state)
+    elif principal.is_state_scoped:
+        own = visible_state_codes(db, principal)
+        state = own[0] if own else None
+    return dqa.national_summary(db, _resolve_period(db, period), state_code=state)
 
 
 @router.get(
