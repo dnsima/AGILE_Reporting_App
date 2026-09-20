@@ -16,7 +16,7 @@ from itertools import count
 import pytest
 
 from app.core.enums import ReportFormat, ReportKind, SubmissionStatus
-from app.models import Indicator, IndicatorValue, Submission
+from app.models import Indicator, IndicatorCategory, IndicatorValue, Submission
 from app.schemas.reporting import ReportRequest
 from app.services import analytics, queries, reference
 from app.services.ingestion.pipeline import revalidate_period
@@ -29,7 +29,19 @@ from app.services.validation import run_validation
 _numbers = count(1400)
 
 
+def _category(db, code, name):
+    """A results-framework category, since the report is organised by them."""
+    existing = db.query(IndicatorCategory).filter_by(code=code).first()
+    if existing is not None:
+        return existing
+    category = IndicatorCategory(code=code, name=name, sort_order=9)
+    db.add(category)
+    db.flush()
+    return category
+
+
 def _indicator(db, code, **kwargs):
+    category = kwargs.pop("category", None)
     indicator = Indicator(
         code=code,
         number=next(_numbers),
@@ -38,6 +50,7 @@ def _indicator(db, code, **kwargs):
         aggregation_method="SUM",
         direction="INCREASE",
         is_cumulative=kwargs.pop("is_cumulative", True),
+        category_id=category.id if category is not None else None,
         **kwargs,
     )
     db.add(indicator)
@@ -92,6 +105,20 @@ def quarter(db):
     sound = _submission(db, "KD", "2026-Q1")
     _value(db, sound, indicator, 1_000)
     run_validation(db, sound)
+
+    # Grievances give the report a figure to draw without needing targets.
+    component3 = _category(db, "C3", "Component 3 - Project Management")
+    received = _indicator(
+        db, "C3.0-06", name="Grievances received",
+        is_cumulative=False, category=component3,
+    )
+    addressed = _indicator(
+        db, "C3.0-07", name="Grievances addressed",
+        is_cumulative=False, category=component3,
+    )
+    for submission, pair in ((flagged_state, (120, 104)), (sound, (88, 80))):
+        _value(db, submission, received, pair[0])
+        _value(db, submission, addressed, pair[1])
 
     period = reference.get_period_by_code(db, "2026-Q1")
     revalidate_period(db, period)
@@ -196,3 +223,56 @@ class TestThroughTheApi:
         )
         assert response.status_code == 201, response.text
         assert "Technical Performance Report" in response.json()["title"]
+
+
+class TestFigures:
+    """Charts are generated from the same numbers the tables print."""
+
+    def _figures(self, document):
+        found = []
+
+        def walk(sections):
+            for section in sections:
+                found.extend(section.figures)
+                walk(section.subsections)
+
+        walk(document.sections)
+        return found
+
+    def test_the_technical_report_carries_figures(self, db, quarter):
+        figures = self._figures(build_technical_report(db, quarter.code))
+        assert figures, "the technical report should carry at least one figure"
+        for figure in figures:
+            assert figure.png.startswith(b"\x89PNG"), "not a PNG"
+            assert len(figure.png) > 2_000
+
+    def test_every_figure_ships_the_data_behind_it(self, db, quarter):
+        """The table is the relief for a palette slot below 3:1 contrast.
+
+        It is also how a reader checks a number, so a figure without one is
+        not finished.
+        """
+        for figure in self._figures(build_technical_report(db, quarter.code)):
+            assert figure.data is not None, figure.caption
+            assert figure.data.rows, figure.caption
+
+    def test_every_figure_describes_itself(self, db, quarter):
+        for figure in self._figures(build_technical_report(db, quarter.code)):
+            assert figure.alt_text and len(figure.alt_text) > 20, figure.caption
+
+    def test_figures_are_numbered_in_order(self, db, quarter):
+        captions = [f.caption for f in self._figures(build_technical_report(db, quarter.code))]
+        numbers = [int(c.split(":")[0].replace("Figure", "").strip()) for c in captions]
+        assert numbers == sorted(numbers)
+        assert numbers == list(range(1, len(numbers) + 1))
+
+    def test_the_word_file_embeds_the_images(self, db, quarter):
+        payload = render_docx(build_technical_report(db, quarter.code))
+        archive = zipfile.ZipFile(io.BytesIO(payload))
+        media = [n for n in archive.namelist() if n.startswith("word/media/")]
+        assert media, "no images embedded in the Word document"
+
+    def test_markdown_falls_back_to_the_data(self, db, quarter):
+        """Markdown cannot embed bytes, so it must carry what the figure says."""
+        text = render_markdown(build_technical_report(db, quarter.code))
+        assert "Figure 1:" in text

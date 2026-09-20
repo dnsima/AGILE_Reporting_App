@@ -33,7 +33,13 @@ from app.models import (
     Submission,
 )
 from app.services import analytics, exposure, reference
-from app.services.reporting.document import ReportDocument, Section, Table
+from app.services.reporting import charts
+from app.services.reporting.document import (
+    Figure,
+    ReportDocument,
+    Section,
+    Table,
+)
 from app.services.reporting.validation_report import collect_issues
 
 #: Marks a passage the author should review before the report is circulated.
@@ -377,8 +383,38 @@ def _component_section(
     return section
 
 
+def _subcomponent_figure(
+    summaries: list[tuple[str, float]], period: ReportingPeriod, number: int
+):
+    chart = charts.progress_against_target(
+        summaries,
+        caption=(
+            f"Figure {number}: Achievement by sub-component against target, "
+            f"{period.label}"
+        ),
+    )
+    if chart is None:
+        return None
+    return Figure(
+        caption=chart.caption,
+        png=chart.png,
+        alt_text=chart.alt_text,
+        width_inches=chart.width_inches,
+        data=Table(
+            caption=f"Table A{number}: Data for Figure {number}",
+            headers=["Sub-component", "Mean % of target"],
+            rows=[[name, _pct(value)] for name, value in summaries],
+            align=["left", "right"],
+        ),
+    )
+
+
 def _subcomponent_section(
-    db: Session, period: ReportingPeriod, table_number: int, notes: dict[str, str]
+    db: Session,
+    period: ReportingPeriod,
+    table_number: int,
+    notes: dict[str, str],
+    numbering=None,
 ) -> Section:
     section = Section(heading="Performance by sub-component", level=2)
     section.add_paragraph(
@@ -446,6 +482,11 @@ def _subcomponent_section(
     )
 
     if summaries:
+        if numbering is not None:
+            candidate = _subcomponent_figure(summaries, period, numbering.value + 1)
+            if candidate is not None:
+                numbering.value += 1
+                section.add_figure(candidate)
         summaries.sort(key=lambda row: row[1], reverse=True)
         strongest, strongest_pct = summaries[0]
         weakest, weakest_pct = summaries[-1]
@@ -766,14 +807,55 @@ def build_technical_report(db: Session, period_code: str) -> ReportDocument:
         "lagging."
     )
     table_number = 3
+
+    # A figure number is spent only when a figure is actually produced. A
+    # report whose first chart is captioned "Figure 6" because five builders
+    # found no data is a report the reader stops trusting.
+    class _Numbering:
+        value = 0
+
+    numbering = _Numbering()
+
+    def attach(section: Section, factory) -> None:
+        candidate = factory(numbering.value + 1)
+        if candidate is not None:
+            numbering.value += 1
+            section.add_figure(candidate)
+
     for component in ("PDO", "C1", "C2", "C3"):
         section = _component_section(db, period, component, table_number, notes)
-        if section is not None:
-            performance.subsections.append(section)
-            table_number += 1
-    performance.subsections.append(
-        _subcomponent_section(db, period, table_number, notes)
+        if section is None:
+            continue
+        performance.subsections.append(section)
+        table_number += 1
+
+        if component == "PDO":
+            attach(section, lambda n: _completion_figure(db, period, n))
+        elif component in ("C1", "C2"):
+            attach(
+                section,
+                lambda n, c=component: _progress_figure(
+                    db,
+                    period,
+                    c,
+                    n,
+                    f"{COMPONENT_TITLES[c]}: progress against target",
+                    notes,
+                ),
+            )
+            if component == "C2":
+                attach(section, lambda n: _conversion_figure(db, period, n))
+        elif component == "C3":
+            attach(
+                section,
+                lambda n: _policy_figure(db, period, n, states_reporting),
+            )
+            attach(section, lambda n: _grievance_figure(db, period, n))
+
+    subcomponents = _subcomponent_section(
+        db, period, table_number, notes, numbering
     )
+    performance.subsections.append(subcomponents)
     table_number += 1
     document.add_section(performance)
 
@@ -786,11 +868,349 @@ def build_technical_report(db: Session, period_code: str) -> ReportDocument:
     )
     cohort_section = _cohort_section(db, period, table_number)
     table_number += 1
+    attach(cohort_section, lambda n: _cohort_figure(db, period, n))
     state_section.subsections.append(cohort_section)
     rankings, table_number = _rankings_section(db, period, table_number, notes)
     state_section.subsections.append(rankings)
     document.add_section(state_section)
 
     document.add_section(_quality_section(db, period, table_number))
+
+    scorecard = Section(heading="Programme performance scorecard", level=1)
+    scorecard.add_paragraph(
+        "Percentage of target is the one base on which every indicator in the "
+        "results framework can be set beside every other, whatever it counts. "
+        "The scorecard below puts them all on it, so that the shape of "
+        "delivery across the programme can be read in one view rather than "
+        "assembled from four component tables."
+    )
+    attach(scorecard, lambda n: _scorecard_figure(db, period, n, notes))
+    document.add_section(scorecard)
+
     document.number_sections()
     return document
+
+
+# --------------------------------------------------------------------------
+# Figures
+# --------------------------------------------------------------------------
+def _state_series(
+    db: Session, period: ReportingPeriod, codes: list[tuple[str, str]]
+) -> tuple[list[str], list[tuple[str, list[float | None]]], Table | None]:
+    """State-by-state values for a handful of indicators, plus the data table.
+
+    Ordered by the first series, so the chart reads as a ranking rather than
+    an alphabetical list nobody can draw a conclusion from.
+    """
+    collected: dict[str, dict[str, float | None]] = {}
+    labels: list[str] = []
+    for code, label in codes:
+        indicator = reference.get_indicator_by_code(db, code, required=False)
+        if indicator is None:
+            continue
+        labels.append(label)
+        analysis = analytics.analyse_indicator(db, indicator, period)
+        for row in analysis.states:
+            if row.reported and row.value is not None:
+                collected.setdefault(row.state_name, {})[label] = row.value
+    if not collected or not labels:
+        return [], [], None
+
+    states = sorted(
+        collected,
+        key=lambda name: collected[name].get(labels[0]) or 0,
+        reverse=True,
+    )
+    series = [
+        (label, [collected[state].get(label) for state in states]) for label in labels
+    ]
+    table = Table(
+        caption=None,
+        headers=["State", *labels],
+        rows=[
+            [state, *[_fmt(collected[state].get(label), decimals=1) for label in labels]]
+            for state in states
+        ],
+        align=["left"] + ["right"] * len(labels),
+    )
+    return states, series, table
+
+
+def _completion_figure(db: Session, period: ReportingPeriod, number: int):
+    states, series, table = _state_series(
+        db,
+        period,
+        [
+            ("PDO-07", "Overall"),
+            ("PDO-08", "JS3"),
+            ("PDO-09", "SS3"),
+        ],
+    )
+    if not states:
+        return None
+    indicator = reference.get_indicator_by_code(db, "PDO-07", required=False)
+    target = None
+    if indicator is not None:
+        target = analytics.analyse_indicator(db, indicator, period).national.target
+
+    chart = charts.grouped_by_state(
+        states,
+        series,
+        caption=f"Figure {number}: Girls' completion rates by state, {period.label}",
+        value_label="Completion rate (%)",
+        target=target,
+        percent=True,
+    )
+    if chart is None:
+        return None
+    return Figure(
+        caption=chart.caption,
+        png=chart.png,
+        alt_text=chart.alt_text,
+        width_inches=chart.width_inches,
+        data=_captioned(table, f"Table A{number}: Data for Figure {number}"),
+    )
+
+
+def _captioned(table: Table | None, caption: str) -> Table | None:
+    if table is None:
+        return None
+    table.caption = caption
+    return table
+
+
+def _progress_figure(
+    db: Session,
+    period: ReportingPeriod,
+    component: str,
+    number: int,
+    title: str,
+    notes: dict[str, str],
+):
+    lines = [
+        line
+        for line in _lines(db, period, _indicators_for(db, component), notes)
+        if line.achievement is not None
+    ]
+    if not lines:
+        return None
+    chart = charts.progress_against_target(
+        [(line.name, line.achievement) for line in lines],
+        caption=f"Figure {number}: {title}, {period.label}",
+    )
+    if chart is None:
+        return None
+    table = Table(
+        caption=f"Table A{number}: Data for Figure {number}",
+        headers=["Code", "Indicator", "Achieved", "Target", "% of target"],
+        rows=[line.row()[:-1] for line in lines],
+        align=["left", "left", "right", "right", "right"],
+    )
+    return Figure(
+        caption=chart.caption,
+        png=chart.png,
+        alt_text=chart.alt_text,
+        width_inches=chart.width_inches,
+        data=table,
+    )
+
+
+def _conversion_figure(db: Session, period: ReportingPeriod, number: int):
+    """Participation against completion, where the gap is the whole point."""
+    pairs = (
+        ("Life skills (2.2a)", "C2.2a-01", "C2.2a-02"),
+        ("Digital literacy (2.2b)", "C2.2b-04", "C2.2b-05"),
+    )
+    rows: list[tuple[str, float, float]] = []
+    data_rows: list[list[str]] = []
+    for label, start_code, end_code in pairs:
+        start = reference.get_indicator_by_code(db, start_code, required=False)
+        end = reference.get_indicator_by_code(db, end_code, required=False)
+        if start is None or end is None:
+            continue
+        start_value = analytics.analyse_indicator(db, start, period).national.value
+        end_value = analytics.analyse_indicator(db, end, period).national.value
+        if start_value is None or end_value is None or not start_value:
+            continue
+        rows.append((label, start_value, end_value))
+        data_rows.append(
+            [
+                label,
+                _fmt(start_value),
+                _fmt(end_value),
+                _pct(100.0 * end_value / start_value),
+            ]
+        )
+    if not rows:
+        return None
+
+    chart = charts.conversion_dumbbell(
+        rows,
+        caption=(
+            f"Figure {number}: Conversion from participation to completion, "
+            f"{period.label}"
+        ),
+        start_label="Participating",
+        end_label="Completing or demonstrating",
+    )
+    if chart is None:
+        return None
+    return Figure(
+        caption=chart.caption,
+        png=chart.png,
+        alt_text=chart.alt_text,
+        width_inches=chart.width_inches,
+        data=Table(
+            caption=f"Table A{number}: Data for Figure {number}",
+            headers=["Sub-component", "Participating", "Completing", "Conversion"],
+            rows=data_rows,
+            align=["left", "right", "right", "right"],
+        ),
+    )
+
+
+def _policy_figure(db: Session, period: ReportingPeriod, number: int, states: int):
+    rows: list[tuple[str, int]] = []
+    for code, label in (
+        ("C3.0-01", "Adopted the national gender education policy"),
+        ("C3.0-02", "Actively implementing the policy"),
+    ):
+        indicator = reference.get_indicator_by_code(db, code, required=False)
+        if indicator is None:
+            continue
+        value = analytics.analyse_indicator(db, indicator, period).national.value
+        if value is not None:
+            rows.append((label, int(value)))
+    if not rows:
+        return None
+
+    chart = charts.status_counts(
+        rows,
+        caption=f"Figure {number}: National gender education policy status, {period.label}",
+        total=states,
+    )
+    if chart is None:
+        return None
+    return Figure(
+        caption=chart.caption,
+        png=chart.png,
+        alt_text=chart.alt_text,
+        width_inches=chart.width_inches,
+        data=Table(
+            caption=f"Table A{number}: Data for Figure {number}",
+            headers=["Status", "States", "Of"],
+            rows=[[label, str(value), str(states)] for label, value in rows],
+            align=["left", "right", "right"],
+        ),
+    )
+
+
+def _grievance_figure(db: Session, period: ReportingPeriod, number: int):
+    states, series, table = _state_series(
+        db,
+        period,
+        [("C3.0-06", "Received"), ("C3.0-07", "Addressed")],
+    )
+    if not states:
+        return None
+    chart = charts.grouped_by_state(
+        states,
+        series,
+        caption=(
+            f"Figure {number}: Grievances received and addressed by state, "
+            f"{period.label}"
+        ),
+        value_label="Grievances",
+    )
+    if chart is None:
+        return None
+    return Figure(
+        caption=chart.caption,
+        png=chart.png,
+        alt_text=chart.alt_text,
+        width_inches=chart.width_inches,
+        data=_captioned(table, f"Table A{number}: Data for Figure {number}"),
+    )
+
+
+def _cohort_figure(db: Session, period: ReportingPeriod, number: int):
+    """Small multiples: enrolment counts and completion rates never share an axis."""
+    cohorts = list(db.scalars(select(Cohort).order_by(Cohort.sort_order)))
+    panels: list[tuple[str, list[tuple[str, float | None]]]] = []
+    data_rows: list[list[str]] = []
+    for code, label in PRIORITY_INDICATORS[:3]:
+        indicator = reference.get_indicator_by_code(db, code, required=False)
+        if indicator is None:
+            continue
+        values: list[tuple[str, float | None]] = []
+        row = [label]
+        for cohort in cohorts:
+            national = analytics.analyse_indicator(
+                db, indicator, period, cohort_code=cohort.code
+            ).national
+            short = cohort.name.replace(" Financing States", "")
+            values.append((short, national.value))
+            row.append(
+                _fmt(
+                    national.value,
+                    decimals=1 if indicator.unit == "PERCENT" else 0,
+                )
+            )
+        if any(value is not None for _, value in values):
+            panels.append((label, values, "%" if indicator.unit == "PERCENT" else ""))
+            data_rows.append(row)
+    if not panels:
+        return None
+
+    chart = charts.small_multiples(
+        panels,
+        caption=f"Figure {number}: Priority indicators by financing cohort, {period.label}",
+    )
+    if chart is None:
+        return None
+    return Figure(
+        caption=chart.caption,
+        png=chart.png,
+        alt_text=chart.alt_text,
+        width_inches=chart.width_inches,
+        data=Table(
+            caption=f"Table A{number}: Data for Figure {number}",
+            headers=["Indicator"] + [c.name for c in cohorts],
+            rows=data_rows,
+            align=["left"] + ["right"] * len(cohorts),
+        ),
+    )
+
+
+def _scorecard_figure(db: Session, period: ReportingPeriod, number: int, notes: dict[str, str]):
+    """Every targeted indicator on one common base: percentage of target."""
+    lines: list[Line] = []
+    for component in ("PDO", "C1", "C2", "C3"):
+        lines.extend(
+            line
+            for line in _lines(db, period, _indicators_for(db, component), notes)
+            if line.achievement is not None
+        )
+    if not lines:
+        return None
+    chart = charts.progress_against_target(
+        [(f"{line.code} {line.name}", line.achievement) for line in lines],
+        caption=(
+            f"Figure {number}: Programme performance scorecard, every targeted "
+            f"indicator against its target, {period.label}"
+        ),
+    )
+    if chart is None:
+        return None
+    return Figure(
+        caption=chart.caption,
+        png=chart.png,
+        alt_text=chart.alt_text,
+        width_inches=chart.width_inches,
+        data=Table(
+            caption=f"Table A{number}: Data for Figure {number}",
+            headers=["Code", "Indicator", "Achieved", "Target", "% of target"],
+            rows=[line.row()[:-1] for line in lines],
+            align=["left", "left", "right", "right", "right"],
+        ),
+    )

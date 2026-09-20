@@ -27,12 +27,30 @@ class Table:
 
 
 @dataclass
+class Figure:
+    """A rendered chart, with the data behind it.
+
+    ``data`` is not optional garnish. It is the accessibility relief for a
+    palette slot below 3:1 contrast, the fallback for any renderer that cannot
+    embed an image, and what a reader checks a number against -- which is why
+    the NPCU reports carry an annex table for every figure they print.
+    """
+
+    caption: str
+    png: bytes
+    alt_text: str
+    width_inches: float = 6.3
+    data: Table | None = None
+
+
+@dataclass
 class Section:
     heading: str
     level: int = 2
     paragraphs: list[str] = field(default_factory=list)
     bullets: list[str] = field(default_factory=list)
     tables: list[Table] = field(default_factory=list)
+    figures: list[Figure] = field(default_factory=list)
     subsections: list[Section] = field(default_factory=list)
 
     def add_paragraph(self, text: str) -> Section:
@@ -41,6 +59,12 @@ class Section:
 
     def add_table(self, table: Table) -> Section:
         self.tables.append(table)
+        return self
+
+    def add_figure(self, figure: Figure | None) -> Section:
+        """Append a figure, ignoring ``None`` so a builder can opt out."""
+        if figure is not None:
+            self.figures.append(figure)
         return self
 
 

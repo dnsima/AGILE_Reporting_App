@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import html as html_lib
 from datetime import datetime, timezone
 
-from app.services.reporting.document import ReportDocument, Section, Table
+from app.services.reporting.document import Figure, ReportDocument, Section, Table
 
 try:  # PDF export is optional; Markdown and HTML always work.
     from reportlab.lib import colors
@@ -13,6 +14,9 @@ try:  # PDF export is optional; Markdown and HTML always work.
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        Image as PdfImage,
+    )
     from reportlab.platypus import (
         PageBreak,
         Paragraph,
@@ -51,6 +55,14 @@ def _markdown_table(table: Table) -> str:
     return "\n".join(lines)
 
 
+def _markdown_figure(figure: Figure) -> str:
+    """Markdown carries no image bytes, so it carries what the figure says."""
+    parts = [f"**{figure.caption}**", "", f"_{figure.alt_text}_", ""]
+    if figure.data is not None:
+        parts.extend([_markdown_table(figure.data), ""])
+    return "\n".join(parts)
+
+
 def _markdown_section(section: Section) -> str:
     parts = [f"{'#' * min(section.level, 6)} {section.heading}", ""]
     for paragraph in section.paragraphs:
@@ -60,6 +72,8 @@ def _markdown_section(section: Section) -> str:
         parts.append("")
     for table in section.tables:
         parts.extend([_markdown_table(table), ""])
+    for figure in section.figures:
+        parts.append(_markdown_figure(figure))
     for subsection in section.subsections:
         parts.append(_markdown_section(subsection))
     return "\n".join(parts)
@@ -91,6 +105,9 @@ def render_markdown(document: ReportDocument) -> str:
 # --------------------------------------------------------------------------
 HTML_STYLE = """
 :root { color-scheme: light dark; }
+figure.chart { margin: 24px 0 8px; text-align: center; }
+figure.chart img { max-width: 100%; height: auto; }
+figure.chart figcaption { font-size: 0.85rem; color: #52514e; margin-top: 6px; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
        margin: 0 auto; max-width: 1100px; padding: 32px 20px 64px; line-height: 1.55;
        color: #16202c; background: #ffffff; }
@@ -165,6 +182,18 @@ def _html_table(table: Table) -> str:
     )
 
 
+def _html_figure(figure: Figure) -> str:
+    encoded = base64.b64encode(figure.png).decode("ascii")
+    table = _html_table(figure.data) if figure.data is not None else ""
+    return (
+        '<figure class="chart">'
+        f'<img src="data:image/png;base64,{encoded}" '
+        f'alt="{html_lib.escape(figure.alt_text)}">'
+        f"<figcaption>{html_lib.escape(figure.caption)}</figcaption>"
+        f"</figure>{table}"
+    )
+
+
 def _html_section(section: Section) -> str:
     level = min(section.level, 6)
     parts = [f"<h{level}>{html_lib.escape(section.heading)}</h{level}>"]
@@ -173,6 +202,7 @@ def _html_section(section: Section) -> str:
         items = "".join(f"<li>{html_lib.escape(b)}</li>" for b in section.bullets)
         parts.append(f"<ul>{items}</ul>")
     parts.extend(_html_table(table) for table in section.tables)
+    parts.extend(_html_figure(figure) for figure in section.figures)
     parts.extend(_html_section(sub) for sub in section.subsections)
     return "\n".join(parts)
 
@@ -291,7 +321,7 @@ def render_pdf(document: ReportDocument) -> bytes:
             story.append(Paragraph(html_lib.escape(paragraph), body_style))
         for bullet in section.bullets:
             story.append(Paragraph(f"&bull; {html_lib.escape(bullet)}", body_style))
-        for table in section.tables:
+        def render_table(table: Table) -> None:
             if table.caption:
                 story.append(Paragraph(f"<b>{html_lib.escape(table.caption)}</b>", body_style))
             data = [[Paragraph(html_lib.escape(h), header_cell_style) for h in table.headers]]
@@ -322,6 +352,23 @@ def render_pdf(document: ReportDocument) -> bytes:
             story.extend([Spacer(1, 2 * mm), pdf_table, Spacer(1, 3 * mm)])
             if table.note:
                 story.append(Paragraph(f"<i>{html_lib.escape(table.note)}</i>", cell_style))
+
+        for table in section.tables:
+            render_table(table)
+
+        for figure in section.figures:
+            image = PdfImage(io.BytesIO(figure.png))
+            scale = min(doc.width / image.imageWidth, 1.0)
+            image.drawWidth = image.imageWidth * scale
+            image.drawHeight = image.imageHeight * scale
+            image.hAlign = "CENTER"
+            story.extend([Spacer(1, 3 * mm), image, Spacer(1, 1 * mm)])
+            story.append(
+                Paragraph(f"<i>{html_lib.escape(figure.caption)}</i>", cell_style)
+            )
+            if figure.data is not None:
+                render_table(figure.data)
+
         for subsection in section.subsections:
             render_section(subsection, depth + 1)
 

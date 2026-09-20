@@ -15,7 +15,7 @@ from __future__ import annotations
 import io
 from datetime import datetime, timezone
 
-from app.services.reporting.document import ReportDocument, Section, Table
+from app.services.reporting.document import Figure, ReportDocument, Section, Table
 
 try:
     from docx import Document
@@ -23,7 +23,7 @@ try:
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
-    from docx.shared import Pt, RGBColor
+    from docx.shared import Inches, Pt, RGBColor
 
     DOCX_AVAILABLE = True
 except ImportError:  # pragma: no cover - exercised only where python-docx is absent
@@ -93,6 +93,26 @@ def _add_table(document, table: Table) -> None:
     document.add_paragraph()
 
 
+def _add_figure(document, figure: Figure) -> None:
+    """Place the chart, then the table behind it.
+
+    The table is the relief for a palette slot below 3:1 contrast and the
+    reader's way of checking a number, so it travels with the figure rather
+    than being banished to an annex nobody turns to.
+    """
+    paragraph = document.add_paragraph()
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = paragraph.add_run()
+    run.add_picture(io.BytesIO(figure.png), width=Inches(figure.width_inches))
+
+    caption = document.add_paragraph(figure.caption)
+    caption.style = document.styles["Caption"]
+    caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    if figure.data is not None:
+        _add_table(document, figure.data)
+
+
 def _add_section(document, section: Section) -> None:
     level = min(max(section.level, 1), 4)
     heading = document.add_heading(section.heading, level=level)
@@ -107,6 +127,9 @@ def _add_section(document, section: Section) -> None:
 
     for table in section.tables:
         _add_table(document, table)
+
+    for figure in section.figures:
+        _add_figure(document, figure)
 
     for subsection in section.subsections:
         _add_section(document, subsection)
