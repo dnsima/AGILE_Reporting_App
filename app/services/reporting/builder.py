@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.enums import QueryStatus, ReportFormat, ReportScope
+from app.core.enums import QueryStatus, ReportFormat, ReportKind, ReportScope
 from app.core.errors import ValidationError
 from app.core.logging_config import get_logger
 from app.models import GeneratedReport, Indicator, ReportingPeriod, User
@@ -16,11 +16,14 @@ from app.schemas.reporting import ReportArtifact, ReportRequest, ReportResponse
 from app.services import analytics, audit, dqa, queries, reference
 from app.services import cohort as cohort_service
 from app.services.reporting.document import ReportDocument, Section, Table
+from app.services.reporting.docx_renderer import render_docx
 from app.services.reporting.renderers import (
     render_html,
     render_markdown,
     render_pdf,
 )
+from app.services.reporting.technical_report import build_technical_report
+from app.services.reporting.validation_report import build_validation_report
 
 logger = get_logger(__name__)
 
@@ -930,7 +933,17 @@ def generate_report(
     db: Session, request: ReportRequest, actor: User | None = None
 ) -> ReportResponse:
     """Build the report, render the requested formats and persist the artifacts."""
-    document, indicators, period = build_report(db, request)
+    kind = ReportKind(request.kind)
+    if kind is ReportKind.VALIDATION:
+        period = reference.get_period_by_code(db, request.period_code)
+        document = build_validation_report(db, period.code)
+        indicators = []
+    elif kind is ReportKind.TECHNICAL:
+        period = reference.get_period_by_code(db, request.period_code)
+        document = build_technical_report(db, period.code)
+        indicators = []
+    else:
+        document, indicators, period = build_report(db, request)
 
     formats = list(dict.fromkeys(request.formats)) or [ReportFormat.MARKDOWN]
     markdown = render_markdown(document)
@@ -968,6 +981,9 @@ def generate_report(
             elif fmt == ReportFormat.HTML:
                 payload = render_html(document).encode("utf-8")
                 filename = f"{stem}.html"
+            elif fmt == ReportFormat.DOCX:
+                payload = render_docx(document)
+                filename = f"{stem}.docx"
             else:
                 payload = render_pdf(document)
                 filename = f"{stem}.pdf"

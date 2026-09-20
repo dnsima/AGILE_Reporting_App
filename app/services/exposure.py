@@ -104,9 +104,21 @@ class IndicatorExposure:
 
     @property
     def net_distortion(self) -> float | None:
-        """Net amount the national total is likely out by, where known."""
-        gaps = [f.distortion for f in self.figures if f.distortion is not None]
-        return sum(gaps) if gaps else None
+        """Net amount the national total is likely out by, where known.
+
+        One figure flagged by two rules is one error, not two, so the largest
+        gap claimed against a figure is the one that counts. Summing them would
+        charge the same wrong number twice over.
+        """
+        worst: dict[tuple[str, str], float] = {}
+        for figure in self.figures:
+            gap = figure.distortion
+            if gap is None:
+                continue
+            key = (figure.state_code, figure.indicator_code)
+            if key not in worst or abs(gap) > abs(worst[key]):
+                worst[key] = gap
+        return sum(worst.values()) if worst else None
 
     @property
     def distortion_share(self) -> float | None:
@@ -122,21 +134,29 @@ class IndicatorExposure:
         share = self.distortion_share
         return share is not None and share >= MATERIAL_SHARE
 
+    @property
+    def figure_count(self) -> int:
+        """Distinct figures in doubt, not findings: two rules can flag one."""
+        return len({(f.state_code, f.indicator_code) for f in self.figures})
+
     def note(self) -> str | None:
         """The disclosure line to carry wherever this national figure appears."""
         if not self.figures:
             return None
-        states = ", ".join(sorted({f.state_code for f in self.figures}))
+        codes = sorted({f.state_code for f in self.figures})
+        count = self.figure_count
+        noun = "figure" if count == 1 else "figures"
+        states = ", ".join(codes)
         gap = self.net_distortion
         if gap is None or abs(gap) < 1:
             return (
-                f"{len(self.figures)} figure(s) under query ({states}), "
+                f"{count} {noun} under query ({states}), "
                 f"{self.exposed_share:.1f}% of the national total."
             )
         direction = "understated" if gap > 0 else "overstated"
         return (
-            f"{len(self.figures)} figure(s) under query ({states}). The national "
-            f"total is {direction} by up to {abs(gap):,.0f} "
+            f"{count} {noun} under query ({states}). The national total is "
+            f"{direction} by up to {abs(gap):,.0f} "
             f"({abs(self.distortion_share or 0):.1f}%)."
         )
 
@@ -155,6 +175,8 @@ class StateExposure:
     exposed_share: float
     #: The indicators where this state's error is material nationally.
     material_findings: list[FigureExposure] = field(default_factory=list)
+    #: The verdict recorded on the return, once the period has been settled.
+    fitness: str | None = None
 
     @property
     def has_blocking(self) -> bool:
@@ -353,6 +375,7 @@ def by_state(db: Session, period: ReportingPeriod) -> list[StateExposure]:
                     if disclosure.status_of(v) is DisclosureStatus.QUERIED
                 ),
                 exposed_share=min(share, 100.0),
+                fitness=submission.fitness_verdict,
                 material_findings=[
                     f
                     for f in flagged

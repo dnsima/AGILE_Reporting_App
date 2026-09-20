@@ -6,12 +6,21 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.core.enums import ReportFormat, ReportScope
+from app.core.enums import ReportFormat, ReportKind, ReportScope
 from app.schemas.common import ORMModel
 
 
 class ReportRequest(BaseModel):
     period_code: str = Field(description="Reporting period, e.g. 2025-Q2.")
+    kind: ReportKind = Field(
+        default=ReportKind.PERFORMANCE,
+        description=(
+            "PERFORMANCE for the configurable platform report; VALIDATION for "
+            "the quarterly Data Quality Validation Report; TECHNICAL for the "
+            "Quarterly Technical Performance Report. The two NPCU quarterlies "
+            "take the period and ignore the scope and section switches."
+        ),
+    )
     scope: ReportScope = ReportScope.NATIONAL
     scope_ref: str | None = Field(
         default=None,

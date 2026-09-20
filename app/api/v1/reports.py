@@ -25,6 +25,9 @@ MEDIA_TYPES = {
     "markdown": "text/markdown; charset=utf-8",
     "html": "text/html; charset=utf-8",
     "pdf": "application/pdf",
+    "docx": (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ),
 }
 
 

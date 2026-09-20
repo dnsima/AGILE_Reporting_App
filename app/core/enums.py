@@ -285,6 +285,19 @@ class ReportFormat(StrEnum):
     DOCX = "docx"
 
 
+class ReportKind(StrEnum):
+    """Which report to build. The two NPCU quarterlies are fixed documents.
+
+    PERFORMANCE is the platform's own configurable report; the other two
+    reproduce the documents the NPCU produces each cycle, so they take a period
+    and nothing else.
+    """
+
+    PERFORMANCE = "PERFORMANCE"
+    VALIDATION = "VALIDATION"
+    TECHNICAL = "TECHNICAL"
+
+
 class DisclosureStatus(StrEnum):
     """What the platform is saying about a single reported figure.
 
