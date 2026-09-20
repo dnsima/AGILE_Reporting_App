@@ -93,10 +93,25 @@ def raise_queries(
     for issue in issues:
         if Severity(issue.severity) not in wanted:
             continue
+
+        value = values.get(issue.indicator_id) if issue.indicator_id else None
+
+        # Label the figure before deciding whether a query is needed. The two
+        # are separate jobs: a query is raised once, but the label has to be
+        # right every time validation runs. Doing this after the duplicate
+        # guard left a figure with an open query against it carrying no label
+        # at all -- which is what an upgraded database looks like, since its
+        # queries predate the labels entirely.
+        if value is not None:
+            reason = f"{issue.rule_code}: {(issue.message or '')[:180]}"
+            if issue.is_blocking:
+                disclosure.mark_unfit(value, reason)
+            else:
+                disclosure.mark_queried(value, reason)
+
         if (issue.rule_code, issue.indicator_id) in existing:
             continue
 
-        value = values.get(issue.indicator_id) if issue.indicator_id else None
         query = DataQuery(
             submission_id=submission.id,
             state_id=submission.state_id,
@@ -120,16 +135,6 @@ def raise_queries(
         db.add(query)
         opened.append(query)
         existing.add((issue.rule_code, issue.indicator_id))
-
-        # A figure the rules cannot vouch for is labelled, not withdrawn: it
-        # still counts towards every total, and carries the reason wherever it
-        # is shown. Only a query resolution may change or clear it.
-        if value is not None:
-            reason = f"{issue.rule_code}: {(issue.message or '')[:180]}"
-            if issue.is_blocking:
-                disclosure.mark_unfit(value, reason)
-            else:
-                disclosure.mark_queried(value, reason)
 
     db.flush()
     _refresh_counts(db, submission)

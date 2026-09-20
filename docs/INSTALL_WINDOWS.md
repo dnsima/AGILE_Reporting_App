@@ -148,6 +148,70 @@ tab, or press `Ctrl+C` a second time to force it. Nothing is lost either way.
 
 ---
 
+## Upgrading an install you already have
+
+Your data survives. The database adds the columns the new version declares the
+first time the app starts, and nothing is dropped, renamed or retyped.
+
+**1. Get the new code.** With Git, from the project folder:
+
+```powershell
+git pull origin claude/agile-reporting-platform-yecfje
+```
+
+Without Git, download the ZIP again (Route B above) and extract it over the
+project folder, replacing files when Windows asks. Your `storage` folder and
+your `.env` are not in the ZIP, so neither is touched.
+
+**2. Install what the new version needs.**
+
+```powershell
+.venv\Scripts\activate
+pip install --timeout 120 --retries 10 -r requirements.txt
+```
+
+This release adds `python-docx` (Word export) and `matplotlib` (the figures in
+the technical report).
+
+**3. Re-validate what you have already loaded.**
+
+```powershell
+python -m scripts.revalidate
+```
+
+Figures loaded earlier were checked against the rules in force when they
+arrived. This puts them through the current set and settles each state's
+fitness verdict, which cannot be judged one state at a time because it depends
+on the national totals. **No reported figure is changed** -- only findings,
+labels and verdicts. It takes a minute or two.
+
+Skipping this step leaves every state without a verdict and the new rules
+unapplied, which looks like the upgrade did nothing.
+
+**4. Start the app.**
+
+```powershell
+uvicorn app.main:app --reload
+```
+
+National totals change the moment you start the new version, before you
+re-validate anything: figures under query are no longer held out of them. That
+is the point of the release, not a fault.
+
+### Backing up first
+
+If you want a copy of the database before upgrading, copy **all three** files:
+
+```powershell
+copy storage\agile.db* C:\AGILE\backup\
+```
+
+`agile.db` alone is not the database. SQLite keeps recent writes in
+`agile.db-wal` alongside it, so copying only the first file can lose everything
+since the last checkpoint -- which on a freshly loaded install is everything.
+
+---
+
 ## Starting over
 
 ```powershell
@@ -171,6 +235,8 @@ point when the catalogue underneath it has changed.
 | `Address already in use` | Something else holds port 8000. `uvicorn app.main:app --reload --port 8001` |
 | `Waiting for connections to close` after `Ctrl+C` | The live-update stream is still open. Close the browser tab, or press `Ctrl+C` again |
 | Indicators you do not recognise | The old catalogue is still in the database. `python -m scripts.seed --reset` |
+| Every state shows no verdict after an upgrade | `python -m scripts.revalidate` was not run |
+| A restored backup is empty | Only `agile.db` was copied. It needs `agile.db-wal` too |
 
 ---
 
