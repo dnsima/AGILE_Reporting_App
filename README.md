@@ -42,7 +42,9 @@ uvicorn app.main:app --reload
 ```
 
 On Windows the activate line is `.venv\Scripts\activate` and the copy is
-`copy .env.example .env`; everything else is the same.
+`copy .env.example .env`; everything else is the same. There is a
+step-by-step walkthrough in [docs/INSTALL_WINDOWS.md](docs/INSTALL_WINDOWS.md),
+including the route without Git installed.
 
 | URL | What it is |
 |---|---|
