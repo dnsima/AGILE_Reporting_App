@@ -140,6 +140,12 @@ uvicorn app.main:app --reload
 Open <http://localhost:8000/dashboard> and sign in with the account step 3
 printed. **Change that password** from inside the app.
 
+To stop the server, press `Ctrl+C` in that window. If it prints `Waiting for
+connections to close` and then sits there, the dashboard's live-update stream
+is still open in your browser — that connection is meant to stay open, so the
+polite shutdown waits for something that will never close. Close the browser
+tab, or press `Ctrl+C` a second time to force it. Nothing is lost either way.
+
 ---
 
 ## Starting over
@@ -163,6 +169,7 @@ point when the catalogue underneath it has changed.
 | `ReadTimeoutError` from `files.pythonhosted.org` | The download stalled, not a failure. Re-run with `--timeout 120 --retries 10` |
 | `no such column: ...` | You are on old code against a new database, or the reverse. Re-pull, then `python -m scripts.seed` |
 | `Address already in use` | Something else holds port 8000. `uvicorn app.main:app --reload --port 8001` |
+| `Waiting for connections to close` after `Ctrl+C` | The live-update stream is still open. Close the browser tab, or press `Ctrl+C` again |
 | Indicators you do not recognise | The old catalogue is still in the database. `python -m scripts.seed --reset` |
 
 ---
