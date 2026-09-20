@@ -42,14 +42,37 @@ logger = get_logger("load")
 WORKBOOKS: dict[str, Path] = {}
 
 
+#: What each flag is for, so an error can name the file the reader is hunting.
+WORKBOOK_LABELS = {
+    "q2": "Q2 2026 analysis model",
+    "q1": "Q1 2026 analysis model",
+    "crosswalk": "Q1 vs Q2 model comparison",
+}
+
+
+def _missing(name: str) -> str:
+    """Why the workbook is unusable: never supplied, or supplied and not there."""
+    label = WORKBOOK_LABELS.get(name, name)
+    path = WORKBOOKS.get(name)
+    if path is None:
+        return f"--{name} was not given. It is the {label} (.xlsx)."
+    return f"--{name} ({label}) is not at\n      {path}"
+
+
+def _hint() -> str:
+    """One closing line: how to see the file names that do exist."""
+    folders = sorted({str(path.parent) for path in WORKBOOKS.values()})
+    listing = " ; ".join(f'dir "{folder}"' for folder in folders)
+    return (
+        "Check the spelling of the file name and the folder it is in.\n"
+        f"  {listing}"
+    )
+
+
 def _workbook(name: str) -> Path:
     path = WORKBOOKS.get(name)
     if path is None or not path.exists():
-        raise SystemExit(
-            f"The {name} workbook was not found. Pass it with --{name}, e.g.\n"
-            f'  python -m scripts.load_npcu_models --{name} '
-            f'"C:\\AGILE\\AGILE_Q2_2026_Analysis_Model_Flagged.xlsx"'
-        )
+        raise SystemExit(f"{_missing(name)}\n  {_hint()}")
     return path
 
 SHEETS = ["PDO", "Component 1", "Component 2", "Component 3"]
@@ -289,14 +312,31 @@ def main() -> None:
             "Pass --skip-q1 to load Q2 on its own."
         )
 
+    # Fail on a bad path now, not after minutes of parsing: the reader has a
+    # typo to fix either way, and finding out early costs them nothing.
+    required = ["q2"] if args.skip_q1 else ["q2", "q1", "crosswalk"]
+    if args.skip_q1 and args.crosswalk is not None:
+        required.append("crosswalk")
+    unusable = [name for name in required if not WORKBOOKS[name].exists()]
+    if unusable:
+        raise SystemExit(
+            "\n".join(
+                ["Cannot start:"]
+                + [f"  {_missing(name)}" for name in unusable]
+                + [f"  {_hint()}"]
+            )
+        )
+
     configure_logging("WARNING", as_json=False)
     init_db()
 
     with session_scope() as db:
-        links = record_lineage(db)
-        targets = load_targets(db, "2026-Q2")
-        print(f"lineage links recorded: {links}")
-        print(f"national targets loaded: {targets}")
+        # Lineage comes from the crosswalk, which --skip-q1 makes optional.
+        if "crosswalk" in WORKBOOKS:
+            print(f"lineage links recorded: {record_lineage(db)}")
+        else:
+            print("no crosswalk given: indicator lineage not recorded")
+        print(f"national targets loaded: {load_targets(db, '2026-Q2')}")
 
         if not args.skip_q1:
             crosswalk = read_crosswalk()
