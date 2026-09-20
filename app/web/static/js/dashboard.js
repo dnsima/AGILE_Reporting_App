@@ -703,6 +703,7 @@
       api.get("/quality/national", {
         period: state.period,
         state: state.stateCode || undefined,
+        cohort: state.cohort || undefined,
       }),
       api.get("/dashboard/dqa-heatmap", { periods: 6, period_type: selectedPeriodType() }),
     ]);

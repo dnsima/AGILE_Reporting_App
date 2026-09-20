@@ -63,13 +63,16 @@ def national(
     principal: CurrentPrincipal,
     period: str | None = None,
     state: str | None = None,
+    cohort: str | None = None,
 ) -> NationalDQASummary:
     if state:
         enforce_state_scope(db, principal, state)
     elif principal.is_state_scoped:
         own = visible_state_codes(db, principal)
         state = own[0] if own else None
-    return dqa.national_summary(db, _resolve_period(db, period), state_code=state)
+    return dqa.national_summary(
+        db, _resolve_period(db, period), state_code=state, cohort_code=cohort
+    )
 
 
 @router.get(

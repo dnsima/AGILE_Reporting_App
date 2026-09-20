@@ -226,18 +226,24 @@ def cohort_summary(
 
 
 def national_summary(
-    db: Session, period: ReportingPeriod, *, state_code: str | None = None
+    db: Session,
+    period: ReportingPeriod,
+    *,
+    state_code: str | None = None,
+    cohort_code: str | None = None,
 ) -> NationalDQASummary:
-    """Consolidated DQA summary for a period, or for one state within it.
+    """Consolidated DQA summary for a period, or for a slice of it.
 
-    The state filter reaches here because the data-quality board ignored it
-    entirely: choosing Bauchi still showed "18 of 18 states assessed" and the
-    national score, which is the opposite of what the filter promised.
+    Both filters reach here because the data-quality board honoured neither:
+    choosing Bauchi still showed "18 of 18 states assessed" and the national
+    score, which is the opposite of what the filter promised. A state wins over
+    a cohort when both are set, because the narrower selection is the one the
+    reader last asked for.
     """
     if state_code:
         states = [reference.get_state_by_code(db, state_code)]
     else:
-        states = reference.active_states(db)
+        states = reference.active_states(db, cohort_code)
     scorecards = [state_scorecard(db, state, period) for state in states]
 
     submitted = [card for card in scorecards if card.submission_id is not None]

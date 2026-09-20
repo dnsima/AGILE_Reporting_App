@@ -433,3 +433,55 @@ class TestEveryBoardHonoursTheStateFilter:
         sound = dqa.national_summary(db, period, state_code="KD").scorecards[0]
         assert flagged.fitness_verdict != sound.fitness_verdict
         assert flagged.exposed_share_pct != sound.exposed_share_pct
+
+
+class TestCohortScope:
+    """The cohort filter set the denominator and left the numerator national.
+
+    That is how the reporting rate came to read "18 of 11 states", 164%: the
+    expected count honoured the filter and the submitted count did not.
+    """
+
+    def _overview(self, db, period, **kwargs):
+        from app.services import dashboard as ds
+
+        return ds.overview(db, period, **kwargs)
+
+    def test_the_reporting_rate_cannot_exceed_a_hundred_percent(self, db, collapse):
+        period = reference.get_period_by_code(db, "2026-Q1")
+        for kwargs in ({}, {"cohort_code": "ORIGINAL"}, {"state_code": "KN"}):
+            overview = self._overview(db, period, **kwargs)
+            status = overview.reporting_status
+            assert status["states_submitted"] <= status["states_expected"], kwargs
+            tile = {t.key: t for t in overview.tiles}["reporting_rate"]
+            assert tile.value <= 100.0, kwargs
+
+    def test_a_cohort_narrows_the_denominator_and_the_numerator(self, db, collapse):
+        period = reference.get_period_by_code(db, "2026-Q1")
+        national = self._overview(db, period).reporting_status
+        scoped = self._overview(db, period, cohort_code="ORIGINAL").reporting_status
+        assert scoped["states_expected"] < national["states_expected"]
+        assert scoped["states_submitted"] <= scoped["states_expected"]
+
+    def test_the_quality_summary_follows_the_cohort(self, db, collapse):
+        """Both reporting states are ORIGINAL, so ADDITIONAL must come back empty."""
+        period = reference.get_period_by_code(db, "2026-Q1")
+        national = self._overview(db, period).dqa_summary
+        scoped = self._overview(db, period, cohort_code="ADDITIONAL").dqa_summary
+        assert national["states_reported"] == 2
+        assert scoped["states_reported"] == 0
+
+    def test_a_state_beats_a_cohort_when_both_are_set(self, db, collapse):
+        """The narrower selection is the one the reader asked for last."""
+        period = reference.get_period_by_code(db, "2026-Q1")
+        both = self._overview(
+            db, period, cohort_code="ORIGINAL", state_code="KN"
+        ).reporting_status
+        assert both["states_expected"] == 1
+
+    def test_a_cohort_view_reports_contribution_not_achievement(self, db, collapse):
+        """"0 of 0 KPIs on track" is what a cohort used to get."""
+        period = reference.get_period_by_code(db, "2026-Q1")
+        keys = {t.key for t in self._overview(db, period, cohort_code="ORIGINAL").tiles}
+        assert "contribution" in keys
+        assert "average_achievement" not in keys

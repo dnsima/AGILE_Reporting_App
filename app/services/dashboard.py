@@ -32,18 +32,24 @@ _UNIT_SYMBOLS = {"PERCENT": "%", "RATIO": "", "SCORE": "/100", "NUMBER": "", "BO
 HEADLINE_INDICATORS = ("PDO-04", "PDO-07", "C1.2-05", "C2.2c-01")
 
 
-def _contribution_tile(db, period, state, indicators, state_board) -> DashboardKpiTile:
-    """What one state contributes towards the national targets.
+def _contribution_tile(db, period, states, indicators, state_board) -> DashboardKpiTile:
+    """What a state or cohort contributes towards the national targets.
 
-    "Average KPI achievement" is meaningless for a single state, because
-    targets are set nationally: the tile simply read "No target" for every
-    state in the federation. What a state can be measured on is its share of
-    the national target it is delivering against.
+    "Average KPI achievement" is meaningless below the national level, because
+    targets are set nationally: the tile read "No target" for every state in
+    the federation and "0 of 0 KPIs on track" for every cohort. What a slice of
+    the programme can be measured on is the share of the national target it is
+    delivering against.
 
     Each indicator is normalised against its own national target before the
     average is taken. Summing classrooms and girls and grievances would be
     arithmetic on incompatible units, and the resulting number would mean
     nothing at all.
+
+    Rates are excluded, and the caption does not stop to say so, because a
+    tile caption is read at a glance: a completion rate is a state's own
+    performance rather than a slice of a national rate, and counting one gave
+    Kogi 40% against the 10.6% of the national result it actually supplies.
     """
     national = analytics.scorecard(db, period, scope="NATIONAL", indicators=indicators)
     national_by_code = {row.indicator.code: row for row in national.rows}
@@ -68,33 +74,36 @@ def _contribution_tile(db, period, state, indicators, state_board) -> DashboardK
         if national_row.value:
             of_delivery.append(100.0 * state_row.value / national_row.value)
 
+    single = len(states) == 1
+    subject = "this state" if single else f"these {len(states)} states"
     if not of_target:
         return DashboardKpiTile(
             key="contribution",
             label="Contribution to national targets",
             value=None,
-            caption="No national target is set on the indicators this state reports.",
+            caption=(
+                f"No national target is set on the indicators {subject} report."
+            ),
             status="No target",
         )
 
     share = sum(of_target) / len(of_target)
     delivered = sum(of_delivery) / len(of_delivery) if of_delivery else None
     reporting = len(reference.active_states(db)) or 1
-    even = 100.0 / reporting
+    # An even share is proportional to how many states are in the selection,
+    # so a cohort of eleven is judged against eleven-eighteenths, not one.
+    even = 100.0 * len(states) / reporting
 
     caption = (
-        f"Mean share of the national target this state delivers, across "
-        f"{len(of_target)} countable indicator(s). An even share across "
-        f"{reporting} states would be {even:.1f}%. Rates are excluded: a "
-        "completion rate is a state's own performance, not a slice of a "
-        "national one."
+        f"Mean over {len(of_target)} countable indicators. An even share for "
+        f"{len(states)} of {reporting} states would be {even:.1f}%."
     )
     if delivered is not None:
-        caption += f" It supplies {delivered:.1f}% of the national result."
+        caption += f" Supplies {delivered:.1f}% of the national result."
 
     return DashboardKpiTile(
         key="contribution",
-        label="Contribution to national targets",
+        label="Share of national targets delivered",
         value=round(share, 1),
         unit="%",
         caption=caption,
@@ -102,7 +111,7 @@ def _contribution_tile(db, period, state, indicators, state_board) -> DashboardK
     )
 
 
-def _fitness_tile(db: Session, period, state) -> DashboardKpiTile:
+def _fitness_tile(db: Session, period, state, scope_codes) -> DashboardKpiTile:
     """Whether the data can be used, which is what the DQA score never said.
 
     The verdict was being computed and stored and then shown nowhere, so the
@@ -110,9 +119,9 @@ def _fitness_tile(db: Session, period, state) -> DashboardKpiTile:
     figure that moves a national total by 89%. It is the first thing on the
     board now, ahead of the score it is so often mistaken for.
     """
-    entries = exposure.by_state(db, period)
-    if state is not None:
-        entries = [row for row in entries if row.state_code == state.code]
+    entries = [
+        row for row in exposure.by_state(db, period) if row.state_code in scope_codes
+    ]
 
     if not entries:
         return DashboardKpiTile(
@@ -173,7 +182,11 @@ def overview(
     stayed national and the filter looked broken because it was.
     """
     state = reference.get_state_by_code(db, state_code) if state_code else None
+    # One resolved scope drives every figure on the board. Deriving the
+    # denominator from the filter and the numerator from an unfiltered count
+    # is how the reporting rate came to read "18 of 11 states", 164%.
     states = [state] if state else reference.active_states(db, cohort_code)
+    scope_ids = [s.id for s in states]
     indicators = reference.active_indicators(db)
 
     if state is not None:
@@ -186,12 +199,13 @@ def overview(
         )
     else:
         board = analytics.scorecard(db, period, scope="NATIONAL", indicators=indicators)
-    national_dqa = dqa.national_summary(db, period)
+
+    national_dqa = dqa.national_summary(
+        db, period, state_code=state_code, cohort_code=cohort_code
+    )
     cohort_rows = [] if state else cohort.cohort_summaries(db, period, indicators=indicators)
 
-    scoped = [Submission.period_id == period.id]
-    if state is not None:
-        scoped.append(Submission.state_id == state.id)
+    scoped = [Submission.period_id == period.id, Submission.state_id.in_(scope_ids)]
     submitted = db.scalar(
         select(func.count(func.distinct(Submission.state_id))).where(*scoped)
     ) or 0
@@ -203,7 +217,8 @@ def overview(
         )
     ) or 0
 
-    fitness = _fitness_tile(db, period, state)
+    scoped_view = state is not None or bool(cohort_code)
+    fitness = _fitness_tile(db, period, state, {s.code for s in states})
     scope_word = state.name if state else ("cohort" if cohort_code else "National")
 
     tiles: list[DashboardKpiTile] = [
@@ -235,27 +250,20 @@ def overview(
         DashboardKpiTile(
             key="dqa_score",
             label=f"{scope_word} DQA score" if not state else "DQA score",
-            # Scoped, or every state showed the same national 98.03 and the
-            # filter looked as though it had done nothing.
-            value=(
-                dqa.state_scorecard(db, state, period).overall_score
-                if state is not None
-                else national_dqa.national_score
-            ),
+            # national_dqa is already scoped to the selection, so this needs
+            # no branch of its own -- and cannot drift from the rest of the
+            # board the way a separately resolved figure would.
+            value=national_dqa.national_score,
             unit="/100",
             caption=(
                 "How many checks passed. It is not a verdict on whether the "
                 "data can be used -- see above."
             ),
-            status=(
-                dqa.state_scorecard(db, state, period).grade
-                if state is not None
-                else national_dqa.grade
-            ),
+            status=national_dqa.grade,
         ),
         (
-            _contribution_tile(db, period, state, indicators, board)
-            if state is not None
+            _contribution_tile(db, period, states, indicators, board)
+            if (state is not None or cohort_code)
             else DashboardKpiTile(
                 key="average_achievement",
                 label="Average KPI achievement",
@@ -270,6 +278,21 @@ def overview(
         ),
     ]
 
+    # A scoped board has no target of its own, so its tiles all read "No target
+    # set" -- true but useless. The national target is the one that exists, so
+    # a scoped tile says what share of it this selection has delivered.
+    national_rows = (
+        {}
+        if scoped_view
+        else {row.indicator.code: row for row in board.rows}
+    )
+    if scoped_view:
+        national_board = analytics.scorecard(
+            db, period, scope="NATIONAL", indicators=indicators
+        )
+        national_rows = {row.indicator.code: row for row in national_board.rows}
+
+    additive = {str(method) for method in ADDITIVE_METHODS}
     for code in HEADLINE_INDICATORS:
         indicator = reference.get_indicator_by_code(db, code, required=False)
         if indicator is None:
@@ -277,24 +300,38 @@ def overview(
         row = next((r for r in board.rows if r.indicator.code == code), None)
         if row is None:
             continue
+
+        if row.achievement_pct is not None:
+            caption = f"{row.achievement_pct:.0f}% of target"
+        elif scoped_view and indicator.aggregation_method in additive:
+            national_row = national_rows.get(code)
+            if national_row is not None and national_row.target and row.value is not None:
+                share = 100.0 * row.value / national_row.target
+                caption = (
+                    f"{share:.1f}% of the national target "
+                    f"({national_row.target:,.0f})"
+                )
+            else:
+                caption = "No national target set"
+        else:
+            caption = "No target set for this selection"
+
         tiles.append(
             DashboardKpiTile(
                 key=code,
                 label=indicator.name,
                 value=row.value,
                 unit=_UNIT_SYMBOLS.get(indicator.unit, ""),
-                caption=(
-                    f"{row.achievement_pct:.0f}% of target"
-                    if row.achievement_pct is not None
-                    else "No target set"
-                ),
+                caption=caption,
                 status=row.status,
             )
         )
 
-    rankings = _state_rankings(db, period, cohort_code)
-    if state is not None:
-        rankings = [row for row in rankings if row["state_code"] == state.code]
+    rankings = [
+        row
+        for row in _state_rankings(db, period, cohort_code)
+        if row["state_code"] in {s.code for s in states}
+    ]
     top_states = sorted(
         (row for row in rankings if row.get("average_achievement_pct")),
         key=lambda row: -row["average_achievement_pct"],
