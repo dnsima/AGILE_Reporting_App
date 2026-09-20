@@ -13,7 +13,7 @@ from statistics import fmean
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.enums import FitnessVerdict, SubmissionStatus, grade_for_score
+from app.core.enums import ADDITIVE_METHODS, FitnessVerdict, SubmissionStatus, grade_for_score
 from app.core.events import event_bus
 from app.models import ReportingPeriod, Submission
 from app.schemas.analytics import DashboardKpiTile, DashboardOverview
@@ -30,6 +30,76 @@ _UNIT_SYMBOLS = {"PERCENT": "%", "RATIO": "", "SCORE": "/100", "NUMBER": "", "BO
 #: led with four empty cards. They now name the flagship access, retention,
 #: supply-side and equity indicators the NPCU's own reporting leads with.
 HEADLINE_INDICATORS = ("PDO-04", "PDO-07", "C1.2-05", "C2.2c-01")
+
+
+def _contribution_tile(db, period, state, indicators, state_board) -> DashboardKpiTile:
+    """What one state contributes towards the national targets.
+
+    "Average KPI achievement" is meaningless for a single state, because
+    targets are set nationally: the tile simply read "No target" for every
+    state in the federation. What a state can be measured on is its share of
+    the national target it is delivering against.
+
+    Each indicator is normalised against its own national target before the
+    average is taken. Summing classrooms and girls and grievances would be
+    arithmetic on incompatible units, and the resulting number would mean
+    nothing at all.
+    """
+    national = analytics.scorecard(db, period, scope="NATIONAL", indicators=indicators)
+    national_by_code = {row.indicator.code: row for row in national.rows}
+    state_by_code = {row.indicator.code: row for row in state_board.rows}
+
+    additive = {str(method) for method in ADDITIVE_METHODS}
+    of_target: list[float] = []
+    of_delivery: list[float] = []
+    for code, national_row in national_by_code.items():
+        state_row = state_by_code.get(code)
+        if state_row is None or state_row.value is None:
+            continue
+        # Only where the national figure is the sum of what states supplied.
+        indicator = next(
+            (i for i in indicators if i.code == code and i.aggregation_method in additive),
+            None,
+        )
+        if indicator is None:
+            continue
+        if national_row.target:
+            of_target.append(100.0 * state_row.value / national_row.target)
+        if national_row.value:
+            of_delivery.append(100.0 * state_row.value / national_row.value)
+
+    if not of_target:
+        return DashboardKpiTile(
+            key="contribution",
+            label="Contribution to national targets",
+            value=None,
+            caption="No national target is set on the indicators this state reports.",
+            status="No target",
+        )
+
+    share = sum(of_target) / len(of_target)
+    delivered = sum(of_delivery) / len(of_delivery) if of_delivery else None
+    reporting = len(reference.active_states(db)) or 1
+    even = 100.0 / reporting
+
+    caption = (
+        f"Mean share of the national target this state delivers, across "
+        f"{len(of_target)} countable indicator(s). An even share across "
+        f"{reporting} states would be {even:.1f}%. Rates are excluded: a "
+        "completion rate is a state's own performance, not a slice of a "
+        "national one."
+    )
+    if delivered is not None:
+        caption += f" It supplies {delivered:.1f}% of the national result."
+
+    return DashboardKpiTile(
+        key="contribution",
+        label="Contribution to national targets",
+        value=round(share, 1),
+        unit="%",
+        caption=caption,
+        status=analytics.status_for(100.0 * share / even) if even else None,
+    )
 
 
 def _fitness_tile(db: Session, period, state) -> DashboardKpiTile:
@@ -183,13 +253,20 @@ def overview(
                 else national_dqa.grade
             ),
         ),
-        DashboardKpiTile(
-            key="average_achievement",
-            label="Average KPI achievement",
-            value=board.average_achievement_pct,
-            unit="%",
-            caption=f"{board.indicators_on_track} of {board.indicators_with_target} KPIs on track",
-            status=analytics.status_for(board.average_achievement_pct),
+        (
+            _contribution_tile(db, period, state, indicators, board)
+            if state is not None
+            else DashboardKpiTile(
+                key="average_achievement",
+                label="Average KPI achievement",
+                value=board.average_achievement_pct,
+                unit="%",
+                caption=(
+                    f"{board.indicators_on_track} of "
+                    f"{board.indicators_with_target} KPIs on track"
+                ),
+                status=analytics.status_for(board.average_achievement_pct),
+            )
         ),
     ]
 

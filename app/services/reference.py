@@ -8,7 +8,7 @@ from datetime import date, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.enums import PeriodType
+from app.core.enums import REPORTING_PERIOD_TYPES, PeriodType
 from app.core.errors import NotFoundError, ValidationError
 from app.models import Cohort, Indicator, IndicatorCategory, ReportingPeriod, State
 
@@ -130,11 +130,26 @@ def latest_period(db: Session, period_type: str | None = None) -> ReportingPerio
 
 
 def ordered_periods(
-    db: Session, period_type: str | None = None, limit: int | None = None
+    db: Session,
+    period_type: str | None = None,
+    limit: int | None = None,
+    *,
+    reporting_only: bool = True,
 ) -> list[ReportingPeriod]:
+    """Reporting periods in calendar order.
+
+    Monthly and quarterly only by default: those are the two cycles AGILE
+    reports on, and a picker offering half-years and financial years nobody
+    files against is a picker that invites a wrong selection. Pass
+    ``reporting_only=False`` where a legacy period still has to be reachable.
+    """
     stmt = select(ReportingPeriod)
     if period_type:
         stmt = stmt.where(ReportingPeriod.period_type == period_type)
+    elif reporting_only:
+        stmt = stmt.where(
+            ReportingPeriod.period_type.in_([str(t) for t in REPORTING_PERIOD_TYPES])
+        )
     periods = sorted(db.scalars(stmt), key=lambda p: p.sort_key)
     return periods[-limit:] if limit else periods
 
@@ -225,7 +240,7 @@ def generate_year(
     due_days_after_close: int = 15,
 ) -> list[ReportingPeriod]:
     """Generate the full reporting calendar for a fiscal year."""
-    types = period_types or list(PeriodType)
+    types = period_types or list(REPORTING_PERIOD_TYPES)
     counts = {
         PeriodType.MONTHLY: 12,
         PeriodType.QUARTERLY: 4,

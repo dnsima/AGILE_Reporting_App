@@ -14,12 +14,12 @@ import csv
 import sys
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.core.config import settings  # noqa: E402
-from app.core.enums import PeriodType, Role  # noqa: E402
+from app.core.enums import REPORTING_PERIOD_TYPES, PeriodType, Role  # noqa: E402
 from app.core.logging_config import configure_logging, get_logger  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.db.base import Base  # noqa: E402
@@ -28,9 +28,11 @@ from app.models import (  # noqa: E402
     Cohort,
     Indicator,
     IndicatorCategory,
+    ReportingPeriod,
     State,
     StateSubcomponent,
     Subcomponent,
+    Submission,
     User,
 )
 from app.services import reference  # noqa: E402
@@ -249,9 +251,37 @@ def seed_indicators(db) -> int:
 def seed_periods(db, years: list[int]) -> int:
     created = 0
     for year in years:
-        created += len(reference.generate_year(db, year, list(PeriodType)))
+        created += len(reference.generate_year(db, year))
     db.flush()
     return created
+
+
+def retire_unused_period_types(db) -> int:
+    """Remove half-year and annual periods nothing was ever filed against.
+
+    Earlier seeds generated all four calendars, so an existing install carries
+    H1/H2/A periods that clutter every picker. One carrying a submission is
+    left exactly where it is -- deleting a period would orphan findings, targets
+    and any report published against it.
+    """
+    unwanted = [str(t) for t in PeriodType if t not in REPORTING_PERIOD_TYPES]
+    removed = 0
+    for period in db.scalars(
+        select(ReportingPeriod).where(ReportingPeriod.period_type.in_(unwanted))
+    ):
+        has_data = db.scalar(
+            select(func.count(Submission.id)).where(Submission.period_id == period.id)
+        )
+        if has_data:
+            logger.info(
+                "keeping an unused-type period that carries data",
+                extra={"period": period.code, "submissions": has_data},
+            )
+            continue
+        db.delete(period)
+        removed += 1
+    db.flush()
+    return removed
 
 
 def seed_admin(db) -> bool:
@@ -304,6 +334,7 @@ def main() -> None:
             "categories": seed_categories(db),
             "indicators": seed_indicators(db),
             "periods": seed_periods(db, args.years),
+            "unused_periods_removed": retire_unused_period_types(db),
             "validation_rules": sync_rule_catalog(db),
         }
         admin_created = seed_admin(db)

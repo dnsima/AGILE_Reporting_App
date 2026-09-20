@@ -314,3 +314,67 @@ class TestDashboardSurfacesTheVerdict:
             assert code.startswith(("PDO-", "C1", "C2", "C3")), code
             assert not code.startswith("KPI-"), f"{code} is a retired code"
         assert isinstance(seeded, set)
+
+
+class TestStateContribution:
+    """Targets are national, so a state is measured on its share of them."""
+
+    def _tile(self, db, period, state_code):
+        from app.services import dashboard as ds
+
+        tiles = {t.key: t for t in ds.overview(db, period, state_code=state_code).tiles}
+        return tiles.get("contribution")
+
+    def test_a_state_view_reports_contribution_not_achievement(self, db, collapse):
+        period = reference.get_period_by_code(db, "2026-Q1")
+        from app.services import dashboard as ds
+
+        keys = {t.key for t in ds.overview(db, period, state_code="KD").tiles}
+        assert "contribution" in keys
+        assert "average_achievement" not in keys
+
+    def test_the_national_view_keeps_average_achievement(self, db, collapse):
+        from app.services import dashboard as ds
+
+        period = reference.get_period_by_code(db, "2026-Q1")
+        keys = {t.key for t in ds.overview(db, period).tiles}
+        assert "average_achievement" in keys
+        assert "contribution" not in keys
+
+    def test_rates_are_excluded_from_the_share(self, db):
+        """A completion rate is a state's own performance, not a slice.
+
+        Including one gave a state reporting 88% against a national target of
+        56% a "contribution" of 157%, which is not a share of anything.
+        """
+        from app.core.enums import ADDITIVE_METHODS, AggregationMethod
+
+        assert AggregationMethod.SUM in ADDITIVE_METHODS
+        assert AggregationMethod.AVERAGE_NONZERO not in ADDITIVE_METHODS
+        assert AggregationMethod.AVERAGE not in ADDITIVE_METHODS
+
+
+class TestReportingPeriodTypes:
+    """AGILE reports monthly and quarterly; nothing else was ever filed."""
+
+    def test_only_monthly_and_quarterly_are_offered(self, db):
+        from app.core.enums import PeriodType
+
+        offered = {p.period_type for p in reference.ordered_periods(db)}
+        assert offered <= {str(PeriodType.MONTHLY), str(PeriodType.QUARTERLY)}
+
+    def test_a_legacy_period_is_still_reachable_when_asked_for(self, db):
+        """Retained on the enum so an older database still loads."""
+        from app.core.enums import PeriodType
+
+        assert PeriodType("SEMI_ANNUAL") is PeriodType.SEMI_ANNUAL
+        everything = reference.ordered_periods(db, reporting_only=False)
+        assert len(everything) >= len(reference.ordered_periods(db))
+
+    def test_generating_a_year_makes_only_the_two(self, db):
+        from app.core.enums import PeriodType
+
+        made = reference.generate_year(db, 2031)
+        types = {p.period_type for p in made}
+        assert types == {str(PeriodType.MONTHLY), str(PeriodType.QUARTERLY)}
+        assert len(made) == 16

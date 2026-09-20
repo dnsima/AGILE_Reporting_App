@@ -78,8 +78,20 @@ STATE_SCOPED_ROLES = {Role.STATE_PIU}
 class PeriodType(StrEnum):
     MONTHLY = "MONTHLY"
     QUARTERLY = "QUARTERLY"
+    #: Retained so a database seeded before AGILE settled on monthly and
+    #: quarterly reporting still loads. Nothing generates or offers them.
     SEMI_ANNUAL = "SEMI_ANNUAL"
     ANNUAL = "ANNUAL"
+
+
+#: The period types AGILE actually reports on. States file monthly to the
+#: performance tracker and quarterly against the results framework; the
+#: half-year and annual calendars were never used and only cluttered every
+#: period picker in the platform.
+REPORTING_PERIOD_TYPES: tuple[PeriodType, ...] = (
+    PeriodType.MONTHLY,
+    PeriodType.QUARTERLY,
+)
 
 
 class SubmissionStatus(StrEnum):
@@ -145,6 +157,14 @@ class AggregationMethod(StrEnum):
     AVERAGE_NONZERO = "AVERAGE_NONZERO"
     #: National figure for a Yes/No indicator: how many states answered Yes.
     COUNT_YES = "COUNT_YES"
+
+
+#: Methods where the national figure is the sum of what states contributed, so
+#: one state's value is a genuine share of it. The averaging methods are not:
+#: a state's completion rate is its own performance, not a slice of a national
+#: rate, and treating it as one gives a state reporting 88% against a national
+#: target of 56% a "contribution" of 157%.
+ADDITIVE_METHODS = {AggregationMethod.SUM, AggregationMethod.COUNT_YES}
 
 
 class TimeBasis(StrEnum):
