@@ -8,7 +8,13 @@ import json
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import CurrentPrincipal, DbSession, require
+from app.api.deps import (
+    CurrentPrincipal,
+    DbSession,
+    enforce_state_scope,
+    require,
+    visible_state_codes,
+)
 from app.core.enums import PeriodType, Permission
 from app.core.errors import NotFoundError
 from app.core.events import event_bus
@@ -42,8 +48,18 @@ def overview(
     principal: CurrentPrincipal,
     period: str | None = None,
     cohort: str | None = None,
+    state: str | None = None,
 ) -> DashboardOverview:
-    return dashboard_service.overview(db, _resolve_period(db, period), cohort_code=cohort)
+    if state:
+        enforce_state_scope(db, principal, state)
+    elif principal.is_state_scoped:
+        # A state PIU sees its own state whether or not it asks, so the board
+        # never shows it national figures it has no business reading.
+        own = visible_state_codes(db, principal)
+        state = own[0] if own else None
+    return dashboard_service.overview(
+        db, _resolve_period(db, period), cohort_code=cohort, state_code=state
+    )
 
 
 @router.get(

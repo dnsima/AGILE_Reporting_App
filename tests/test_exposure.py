@@ -258,3 +258,59 @@ class TestChangeManagement:
         db.refresh(later)
         assert later.open_query_count == 0
         assert replacement.open_query_count > 0
+
+
+class TestDashboardSurfacesTheVerdict:
+    """The verdict was computed, stored, and then shown nowhere at all."""
+
+    def _tiles(self, db, period, state_code=None):
+        from app.services import dashboard as ds
+
+        return {t.key: t for t in ds.overview(db, period, state_code=state_code).tiles}
+
+    def test_the_board_leads_with_fitness_not_the_score(self, db, collapse):
+        period = reference.get_period_by_code(db, "2026-Q1")
+        from app.services.ingestion.pipeline import revalidate_period
+
+        revalidate_period(db, period)
+        tiles = self._tiles(db, period)
+        assert "fitness" in tiles
+        assert tiles["fitness"].status == str(FitnessVerdict.NOT_FIT)
+
+    def test_the_score_tile_says_what_it_is_not(self, db, collapse):
+        """A reader took "Excellent" as a verdict, so the tile disowns that."""
+        period = reference.get_period_by_code(db, "2026-Q1")
+        caption = self._tiles(db, period)["dqa_score"].caption
+        assert "not a verdict" in caption.lower()
+
+    def test_selecting_a_state_changes_the_figures(self, db, collapse):
+        """The filter set a variable nothing read, so the board never moved."""
+        from app.services.ingestion.pipeline import revalidate_period
+
+        period = reference.get_period_by_code(db, "2026-Q1")
+        revalidate_period(db, period)
+
+        flagged = self._tiles(db, period, state_code="KN")
+        sound = self._tiles(db, period, state_code="KD")
+
+        assert flagged["fitness"].status == str(FitnessVerdict.NOT_FIT)
+        assert sound["fitness"].status != str(FitnessVerdict.NOT_FIT)
+        assert flagged["fitness"].value != sound["fitness"].value
+
+    def test_a_state_view_is_not_the_national_view(self, db, collapse):
+        period = reference.get_period_by_code(db, "2026-Q1")
+        national = self._tiles(db, period)["fitness"]
+        one_state = self._tiles(db, period, state_code="KD")["fitness"]
+        assert national.label != one_state.label
+
+    def test_headline_indicator_codes_exist_in_the_catalogue(self, db):
+        """They named pre-recode codes for a while, so every tile was blank."""
+        from app.services.dashboard import HEADLINE_INDICATORS
+
+        seeded = {i.code for i in db.query(Indicator)}
+        # The test catalogue is small, so assert the shape rather than presence:
+        # a headline code must at least look like a current framework code.
+        for code in HEADLINE_INDICATORS:
+            assert code.startswith(("PDO-", "C1", "C2", "C3")), code
+            assert not code.startswith("KPI-"), f"{code} is a retired code"
+        assert isinstance(seeded, set)

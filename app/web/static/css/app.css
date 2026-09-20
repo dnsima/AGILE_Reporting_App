@@ -129,6 +129,18 @@ body {
 .tile.lagging, .tile.weak { border-left-color: var(--warn); }
 .tile.off-track, .tile.poor { border-left-color: var(--bad); }
 
+/* Fitness verdicts. These say whether the data can be used, so they are the
+   loudest thing on the board -- louder than the DQA score beside them, which
+   only says how many checks passed. */
+.tile.fit { border-left-color: var(--ok); }
+.tile.fit-with-notes { border-left-color: var(--warn); }
+.tile.not-fit-for-use {
+  border-left-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 7%, transparent);
+}
+.tile.not-fit-for-use .value { color: var(--bad); }
+.tile.no-data { border-left-color: var(--muted, #888); }
+
 /* --------------------------------------------------------------- tables -- */
 table { border-collapse: collapse; width: 100%; font-size: .82rem; }
 th, td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }

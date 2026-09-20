@@ -13,14 +13,80 @@ from statistics import fmean
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.enums import SubmissionStatus, grade_for_score
+from app.core.enums import FitnessVerdict, SubmissionStatus, grade_for_score
 from app.core.events import event_bus
 from app.models import ReportingPeriod, Submission
 from app.schemas.analytics import DashboardKpiTile, DashboardOverview
-from app.services import analytics, cohort, dqa, reference
+from app.services import analytics, cohort, dqa, exposure, reference
+
+#: What a unit looks like on a tile. The raw enum was going straight to the
+#: page, so a completion rate rendered as "64.0882PERCENT".
+_UNIT_SYMBOLS = {"PERCENT": "%", "RATIO": "", "SCORE": "/100", "NUMBER": "", "BOOLEAN": ""}
 
 #: Headline indicators surfaced as tiles at the top of the dashboard.
-HEADLINE_INDICATORS = ("KPI-001", "KPI-007", "KPI-009", "KPI-029")
+#:
+#: These were KPI-001/007/009/029 until the 70-to-53 recode retired those
+#: codes, after which every tile silently resolved to nothing and the dashboard
+#: led with four empty cards. They now name the flagship access, retention,
+#: supply-side and equity indicators the NPCU's own reporting leads with.
+HEADLINE_INDICATORS = ("PDO-04", "PDO-07", "C1.2-05", "C2.2c-01")
+
+
+def _fitness_tile(db: Session, period, state) -> DashboardKpiTile:
+    """Whether the data can be used, which is what the DQA score never said.
+
+    The verdict was being computed and stored and then shown nowhere, so the
+    dashboard still led with a grade of "Excellent" for a state reporting a
+    figure that moves a national total by 89%. It is the first thing on the
+    board now, ahead of the score it is so often mistaken for.
+    """
+    entries = exposure.by_state(db, period)
+    if state is not None:
+        entries = [row for row in entries if row.state_code == state.code]
+
+    if not entries:
+        return DashboardKpiTile(
+            key="fitness",
+            label="Fit for use",
+            value=None,
+            caption="No return has been validated for this period yet.",
+            status=str(FitnessVerdict.NO_DATA),
+        )
+
+    not_fit = [row for row in entries if row.fitness == str(FitnessVerdict.NOT_FIT)]
+    worst = max(entries, key=lambda row: row.exposed_share)
+
+    if state is not None:
+        row = entries[0]
+        verdict = row.fitness or str(FitnessVerdict.NO_DATA)
+        return DashboardKpiTile(
+            key="fitness",
+            label="Fit for use",
+            value=round(row.exposed_share, 1),
+            unit="% in doubt",
+            caption=(
+                f"{row.figures_unfit} figure(s) unfit, {row.figures_queried} "
+                "under query. Every figure is still counted in the national "
+                "totals."
+            ),
+            status=verdict,
+        )
+
+    return DashboardKpiTile(
+        key="fitness",
+        label="States not fit for use",
+        value=float(len(not_fit)),
+        unit=f" of {len(entries)}",
+        caption=(
+            f"Worst: {worst.state_name}, {worst.exposed_share:.0f}% of its "
+            "contribution in doubt. Nothing is withheld from a total."
+        ),
+        status=(
+            str(FitnessVerdict.NOT_FIT)
+            if not_fit
+            else str(FitnessVerdict.FIT)
+        ),
+    )
 
 
 def overview(
@@ -28,38 +94,61 @@ def overview(
     period: ReportingPeriod,
     *,
     cohort_code: str | None = None,
+    state_code: str | None = None,
 ) -> DashboardOverview:
-    states = reference.active_states(db, cohort_code)
+    """Headline tiles for a period, optionally narrowed to a cohort or state.
+
+    The state filter existed in the page for some time without reaching here:
+    choosing a state set a variable nothing read, so every figure on screen
+    stayed national and the filter looked broken because it was.
+    """
+    state = reference.get_state_by_code(db, state_code) if state_code else None
+    states = [state] if state else reference.active_states(db, cohort_code)
     indicators = reference.active_indicators(db)
 
-    board = (
-        analytics.scorecard(db, period, scope="COHORT", cohort_code=cohort_code, indicators=indicators)
-        if cohort_code
-        else analytics.scorecard(db, period, scope="NATIONAL", indicators=indicators)
-    )
-    national_dqa = dqa.national_summary(db, period)
-    cohort_rows = cohort.cohort_summaries(db, period, indicators=indicators)
-
-    submitted = db.scalar(
-        select(func.count(func.distinct(Submission.state_id))).where(
-            Submission.period_id == period.id
+    if state is not None:
+        board = analytics.scorecard(
+            db, period, scope="STATE", state_code=state.code, indicators=indicators
         )
+    elif cohort_code:
+        board = analytics.scorecard(
+            db, period, scope="COHORT", cohort_code=cohort_code, indicators=indicators
+        )
+    else:
+        board = analytics.scorecard(db, period, scope="NATIONAL", indicators=indicators)
+    national_dqa = dqa.national_summary(db, period)
+    cohort_rows = [] if state else cohort.cohort_summaries(db, period, indicators=indicators)
+
+    scoped = [Submission.period_id == period.id]
+    if state is not None:
+        scoped.append(Submission.state_id == state.id)
+    submitted = db.scalar(
+        select(func.count(func.distinct(Submission.state_id))).where(*scoped)
     ) or 0
     approved = db.scalar(
         select(func.count(func.distinct(Submission.state_id))).where(
-            Submission.period_id == period.id,
+            *scoped,
             Submission.status == SubmissionStatus.APPROVED,
             Submission.is_current.is_(True),
         )
     ) or 0
 
+    fitness = _fitness_tile(db, period, state)
+    scope_word = state.name if state else ("cohort" if cohort_code else "National")
+
     tiles: list[DashboardKpiTile] = [
         DashboardKpiTile(
             key="reporting_rate",
-            label="States reporting",
+            label="Reporting" if state else "States reporting",
             value=round(submitted / len(states) * 100, 1) if states else 0.0,
             unit="%",
-            caption=f"{submitted} of {len(states)} states submitted for {period.code}",
+            caption=(
+                f"{state.name} "
+                + ("submitted" if submitted else "has not submitted")
+                + f" for {period.code}"
+                if state
+                else f"{submitted} of {len(states)} states submitted for {period.code}"
+            ),
             status="On track" if states and submitted / len(states) >= 0.9 else "Lagging",
         ),
         DashboardKpiTile(
@@ -67,16 +156,32 @@ def overview(
             label="Data cleared for analysis",
             value=round(approved / len(states) * 100, 1) if states else 0.0,
             unit="%",
-            caption=f"{approved} state submissions passed the quality gate",
+            caption=(
+                f"{approved} state submission(s) passed the quality gate"
+            ),
             status="On track" if states and approved / len(states) >= 0.8 else "Lagging",
         ),
+        fitness,
         DashboardKpiTile(
             key="dqa_score",
-            label="National DQA score",
-            value=national_dqa.national_score,
+            label=f"{scope_word} DQA score" if not state else "DQA score",
+            # Scoped, or every state showed the same national 98.03 and the
+            # filter looked as though it had done nothing.
+            value=(
+                dqa.state_scorecard(db, state, period).overall_score
+                if state is not None
+                else national_dqa.national_score
+            ),
             unit="/100",
-            caption=f"Grade: {national_dqa.grade}",
-            status=national_dqa.grade,
+            caption=(
+                "How many checks passed. It is not a verdict on whether the "
+                "data can be used -- see above."
+            ),
+            status=(
+                dqa.state_scorecard(db, state, period).grade
+                if state is not None
+                else national_dqa.grade
+            ),
         ),
         DashboardKpiTile(
             key="average_achievement",
@@ -100,7 +205,7 @@ def overview(
                 key=code,
                 label=indicator.name,
                 value=row.value,
-                unit=indicator.unit,
+                unit=_UNIT_SYMBOLS.get(indicator.unit, ""),
                 caption=(
                     f"{row.achievement_pct:.0f}% of target"
                     if row.achievement_pct is not None
@@ -110,8 +215,11 @@ def overview(
             )
         )
 
+    rankings = _state_rankings(db, period, cohort_code)
+    if state is not None:
+        rankings = [row for row in rankings if row["state_code"] == state.code]
     top_states = sorted(
-        (row for row in _state_rankings(db, period, cohort_code) if row.get("average_achievement_pct")),
+        (row for row in rankings if row.get("average_achievement_pct")),
         key=lambda row: -row["average_achievement_pct"],
     )[:10]
 

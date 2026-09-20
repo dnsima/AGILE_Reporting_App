@@ -415,7 +415,14 @@
   }
 
   function scopeParams() {
-    return { period: state.period, cohort: state.cohort || undefined };
+    // stateCode has to travel with the request. The filter set it and nothing
+    // sent it, so choosing a state redrew the same national board and the
+    // control looked broken because nothing downstream ever saw it.
+    return {
+      period: state.period,
+      cohort: state.cohort || undefined,
+      state: state.stateCode || undefined,
+    };
   }
 
   function selectedPeriodType() {
