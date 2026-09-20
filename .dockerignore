@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+storage
+*.db
+*.db-shm
+*.db-wal
+__pycache__
+**/__pycache__
+.pytest_cache
+.ruff_cache
+tests
+docs
+*.md
+.env
+.env.*
+!.env.production.example

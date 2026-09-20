@@ -1,0 +1,74 @@
+# What GitHub can usefully do for this project: prove every push still passes
+# before it reaches the server. GitHub cannot host the app itself — it is a
+# Python service with a database, and Pages only serves static files.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt ruff
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Tests
+        run: pytest -q
+        env:
+          SECRET_KEY: ci-only-key-not-used-to-serve-anything-at-all
+          ENVIRONMENT: test
+
+      - name: Refuse to start unconfigured in production
+        # The guard is the thing standing between a careless deploy and a
+        # server signing sessions with a published key, so prove it still bites.
+        run: |
+          set +e
+          ENVIRONMENT=production python - <<'PY'
+          import asyncio
+          from app.main import app, lifespan
+          try:
+              asyncio.run(lifespan(app).__aenter__())
+          except RuntimeError as error:
+              print(error)
+              raise SystemExit(0)
+          raise SystemExit("started in production with default settings")
+          PY
+          test $? -eq 0
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the deployment image
+        run: docker build -t agile-reporting:ci .
+      - name: It starts and answers its health check
+        run: |
+          docker run -d --name agile-ci -p 8000:8000 \
+            -e SECRET_KEY=ci-only-key-not-used-to-serve-anything-at-all \
+            -e DATABASE_URL=sqlite:////app/storage/ci.db \
+            agile-reporting:ci
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/api/v1/health; then exit 0; fi
+            sleep 2
+          done
+          echo "health check never passed"; docker logs agile-ci; exit 1

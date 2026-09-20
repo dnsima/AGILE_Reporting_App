@@ -56,11 +56,16 @@ async def lifespan(app: FastAPI):
     if created:
         logger.info("registered validation rules", extra={"count": created})
 
-    if settings.is_production and settings.secret_key.startswith("change-me"):
-        logger.error(
-            "SECRET_KEY is still the development default; set a strong value before serving "
-            "production traffic."
-        )
+    if settings.is_production:
+        problems = settings.production_problems()
+        if problems:
+            for problem in problems:
+                logger.error("unsafe production setting", extra={"problem": problem})
+            raise RuntimeError(
+                "Refusing to start in production with "
+                f"{len(problems)} unsafe setting(s):\n  - "
+                + "\n  - ".join(problems)
+            )
 
     yield
     logger.info("shutting down")

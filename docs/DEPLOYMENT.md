@@ -6,16 +6,61 @@
 * PostgreSQL 14+ for production (SQLite is fine for evaluation and pilots)
 * A reverse proxy terminating TLS
 
+## The quickest safe path: Docker Compose
+
+Point a DNS A record at the server, then:
+
+```bash
+git clone -b claude/agile-reporting-platform-yecfje \
+    https://github.com/dnsima/AGILE_Reporting_App.git
+cd AGILE_Reporting_App
+
+cp .env.production.example .env     # fill in AGILE_DOMAIN and the secrets
+docker compose up -d
+docker compose run --rm app python -m scripts.seed
+```
+
+That brings up three containers: the application, PostgreSQL, and Caddy as the
+reverse proxy. Caddy obtains and renews the HTTPS certificate from Let's
+Encrypt on its own, so there is no certbot step and no renewal cron to forget.
+The database and the storage volume are not published to the host; only ports
+80 and 443 are.
+
+Then sign in at `https://your-domain/dashboard` as the bootstrap
+administrator, change that password, and create the real NPCU and state
+accounts.
+
+To load the real returns rather than start empty, copy the workbooks onto the
+server and:
+
+```bash
+docker compose run --rm -v /path/to/workbooks:/data app \
+    python -m scripts.load_npcu_models \
+        --q2 /data/AGILE_Q2_2026_Analysis_Model_Flagged.xlsx \
+        --q1 /data/AGILE_Q1_2026_Analysis_Model_v3_5.xlsx \
+        --crosswalk /data/AGILE_Q1_vs_Q2_2026_Model_Comparison.xlsx
+```
+
 ## Before serving real traffic
 
-| Setting | Do this |
-|---|---|
-| `SECRET_KEY` | Replace the default with a long random value — it signs every session token. `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
-| `BOOTSTRAP_ADMIN_PASSWORD` | Change it, then change the password again from inside the app after first sign-in |
-| `ENVIRONMENT` | Set to `production`. The app logs an error at startup if the default `SECRET_KEY` is still in place |
-| `DEBUG` | `false`, so internal exception text is not returned to callers |
-| `DATABASE_URL` | Point at PostgreSQL |
-| `CORS_ORIGINS` | List the dashboards that may call the API, instead of `*` |
+With `ENVIRONMENT=production` the app **refuses to start** if any of these is
+left at its default. Setting `production` is the operator saying "this is
+live", and a warning in a container log scrolls past while the server signs
+real sessions with a key published in this repository.
+
+| Setting | Do this | Refuses to start? |
+|---|---|---|
+| `SECRET_KEY` | A long random value — it signs every session token. `python -c "import secrets; print(secrets.token_urlsafe(48))"` | Yes, if default or under 32 characters |
+| `BOOTSTRAP_ADMIN_PASSWORD` | Set one, then change it again from inside the app after first sign-in | Yes, if left at `ChangeMe!2024` |
+| `DEBUG` | `false`, so internal exception text is not returned to callers | Yes, if on |
+| `CORS_ORIGINS` | Leave empty for same-origin only — what the bundled dashboard needs. List exact origins only if something else calls the API from a browser | Yes, if `*` |
+| `ENVIRONMENT` | `production` | — |
+| `DATABASE_URL` | PostgreSQL. SQLite serialises writes and will block under concurrent state uploads | No, but do it |
+
+`CORS_ORIGINS=*` is refused because the API accepts a session cookie: with
+credentials enabled, `*` makes the server echo back whatever origin asks.
+`SameSite=Lax` on that cookie stops the obvious cross-site attack, but the
+configuration should not depend on it.
 
 ## PostgreSQL
 
@@ -116,15 +161,44 @@ Set `LOG_JSON=false` for readable console output in development.
 
 ## Backup and retention
 
-The platform is designed to hold history indefinitely for longitudinal
-tracking — nothing is overwritten. Re-uploads supersede rather than replace, and
-the audit trail is append-only. Back up the database and both storage
-directories together, since submissions reference files on disk.
+Nothing is overwritten: re-uploads supersede rather than replace, a restated
+figure keeps its original, and the audit trail is append-only. That makes this
+the reporting record, so back it up as one.
+
+The database and the storage volume must be backed up **together** — a
+submission row points at a file on disk, and a database restored without its
+evidence files is a record with holes in it.
+
+```bash
+# Database
+docker compose exec -T db pg_dump -U agile agile | gzip > agile-$(date +%F).sql.gz
+
+# Uploads, evidence and published reports
+docker run --rm -v agile_reporting_app_app-storage:/storage -v "$PWD":/backup \
+    alpine tar czf /backup/agile-storage-$(date +%F).tar.gz -C /storage .
+```
+
+Run both from a cron job and keep the pair. Check the volume name with
+`docker volume ls` — Compose prefixes it with the project directory.
 
 ## Upgrading
 
-`Base.metadata.create_all()` creates missing tables but does not alter existing
-ones. For schema changes after the first release, add Alembic:
+```bash
+git pull
+docker compose build app
+docker compose up -d
+docker compose run --rm app python -m scripts.seed   # if the catalogue changed
+```
+
+Missing tables and columns are added on startup by `init_db()`. It only ever
+adds — never drops, renames or retypes — and skips any column it cannot add
+without inventing a value for the rows already there, so a schema change never
+arrives as "no such column". Re-seeding retires indicators and states the seed
+files no longer carry rather than leaving them active beside the new ones.
+
+That covers everything this project has needed so far. A change that has to
+*alter* an existing column — a type change, a new NOT NULL without a default —
+is beyond it, and is the point at which to add Alembic:
 
 ```bash
 pip install alembic

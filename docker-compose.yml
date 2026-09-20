@@ -1,0 +1,72 @@
+# AGILE Reporting Platform — a VPS deployment.
+#
+#   1. Point a DNS A record at this server, e.g. agile.example.org
+#   2. cp .env.production.example .env  and fill it in
+#   3. docker compose up -d
+#   4. docker compose run --rm app python -m scripts.seed
+#
+# Caddy obtains and renews the HTTPS certificate on its own, so there is no
+# certbot step and no renewal cron to forget.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agile}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-agile}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agile} -d ${POSTGRES_DB:-agile}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Not published to the host: only the app needs to reach it.
+    expose:
+      - "5432"
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-agile}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-agile}
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@agile.gov.ng}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?set BOOTSTRAP_ADMIN_PASSWORD in .env}
+      # Empty means same-origin only, which is what the bundled dashboard needs.
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      LOG_JSON: "true"
+    volumes:
+      # The uploaded returns, the evidence and the published reports. The
+      # container is disposable; this is not.
+      - app-storage:/app/storage
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      AGILE_DOMAIN: ${AGILE_DOMAIN:?set AGILE_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data      # certificates; losing this re-issues them
+      - caddy-config:/config
+
+volumes:
+  db-data:
+  app-storage:
+  caddy-data:
+  caddy-config:

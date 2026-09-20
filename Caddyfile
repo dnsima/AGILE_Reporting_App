@@ -1,0 +1,38 @@
+# HTTPS is obtained and renewed automatically for AGILE_DOMAIN.
+# Everything on :80 is redirected to :443 by Caddy's own default.
+
+{$AGILE_DOMAIN} {
+	encode zstd gzip
+
+	# The dashboard streams live updates over SSE, which must not be buffered
+	# and must not time out at the proxy.
+	@events path /api/v1/dashboard/stream*
+	reverse_proxy @events app:8000 {
+		flush_interval -1
+		transport http {
+			response_header_timeout 24h
+		}
+	}
+
+	reverse_proxy app:8000
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	# Uploads are whole workbooks; the default limit is too small for them.
+	request_body {
+		max_size 60MB
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 20MB
+			roll_keep 10
+		}
+	}
+}
