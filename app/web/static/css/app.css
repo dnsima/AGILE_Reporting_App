@@ -535,3 +535,5 @@ tr.query-row.overdue td.due { color: var(--bad); font-weight: 700; }
    made the state names run together into one word. */
 .chart-box svg { display: block; height: auto; overflow: visible; max-width: none; }
 .chart-box .viz-legend { margin-top: 8px; }
+.btn.small { padding: 3px 10px; font-size: .72rem; }
+.proj-meta .btn.small { margin-left: auto; }

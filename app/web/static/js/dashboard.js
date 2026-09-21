@@ -203,6 +203,15 @@
       state.period = this.value;
       render();
     });
+    $("workbook-btn").addEventListener("click", function () {
+      // Built from the same payload the board draws, so the sheet a reader
+      // downloads cannot disagree with the screen they downloaded it from.
+      window.location.href = api.downloadUrl("/reports/analysis-workbook", {
+        period: state.period,
+      });
+      toast("Building the workbook for " + state.period + "…", "info");
+    });
+
     $("logout-btn").addEventListener("click", async function () {
       await api.logout();
       window.location.href = "/login";

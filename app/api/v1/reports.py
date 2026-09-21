@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 
 from app.api.deps import DbSession, enforce_state_scope, require
+from app.core.config import settings
 from app.core.enums import Permission, ReportFormat, ReportScope
 from app.core.errors import NotFoundError, ValidationError
 from app.models import GeneratedReport
@@ -17,7 +18,8 @@ from app.schemas.reporting import (
     ReportRequest,
     ReportResponse,
 )
-from app.services import reporting
+from app.services import analysis_model, reference, reporting
+from app.services.reporting import workbook
 
 router = APIRouter(prefix="/reports", tags=["Reporting"])
 
@@ -56,6 +58,39 @@ def generate(
     response = reporting.generate_report(db, payload, principal.user)
     db.commit()
     return response
+
+
+@router.get(
+    "/analysis-workbook",
+    summary="Download the quarterly analysis model as a workbook",
+    dependencies=[Depends(require(Permission.ANALYTICS_READ))],
+    response_class=FileResponse,
+)
+def analysis_workbook(
+    db: DbSession,
+    period: str | None = None,
+) -> FileResponse:
+    """The analysis model as the workbook the NPCU already works in.
+
+    Built from the same payload the dashboard draws, so the sheet a reader
+    downloads cannot disagree with the screen they downloaded it from. This
+    is the artefact that used to be assembled by hand each quarter.
+    """
+    resolved = (
+        reference.get_period_by_code(db, period) if period else reference.latest_period(db)
+    )
+    if resolved is None:
+        raise NotFoundError("No reporting periods have been configured yet")
+
+    model = analysis_model.build(db, resolved.code)
+    path = workbook.write(model, Path(settings.report_dir) / "workbooks")
+    return FileResponse(
+        path,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        filename=path.name,
+    )
 
 
 @router.get(
