@@ -61,8 +61,7 @@ def _submission_read(submission: Submission) -> SubmissionRead:
         row_count=submission.row_count,
         mapped_count=submission.mapped_count,
         unmapped_count=submission.unmapped_count,
-        dqa_score=submission.dqa_score,
-        dqa_grade=submission.dqa_grade,
+        fitness_verdict=submission.fitness_verdict,
         error_count=submission.error_count,
         warning_count=submission.warning_count,
         open_query_count=submission.open_query_count,
@@ -188,7 +187,13 @@ async def upload(
     if accepted:
         message = (
             f"Ingested {submission.mapped_count} value(s) for {submission.state.code}/"
-            f"{submission.period.code}. DQA score {submission.dqa_score} ({submission.dqa_grade})."
+            f"{submission.period.code}. "
+            + (
+                f"{summary.error_count} error(s) and {summary.warning_count} "
+                "warning(s) raised, each one a query with the state."
+                if summary.error_count or summary.warning_count
+                else "No findings against it."
+            )
         )
     else:
         message = (
@@ -427,7 +432,7 @@ def delete_submission(
         state_id=submission.state_id,
         period_id=submission.period_id,
         summary=f"Deleted submission #{submission.id} ({submission.state.code}/{submission.period.code}).",
-        before={"status": submission.status, "dqa_score": submission.dqa_score},
+        before={"status": submission.status, "verdict": submission.fitness_verdict},
         ip_address=client_ip(request),
     )
     db.delete(submission)

@@ -46,8 +46,15 @@ def _issues(summary, rule_code):
     return [issue for issue in summary.issues if issue.rule_code == rule_code]
 
 
-def _score(summary, dimension):
-    return next(d.score for d in summary.dimensions if d.dimension == str(dimension))
+def _findings(summary, dimension) -> int:
+    """How many findings landed in one area.
+
+    This used to read a dimension's 0-100 score. Scoring was removed: the
+    number was a pass rate over automated checks and sat near 100 for any
+    plausible return. What a rule is for is finding things, so that is what
+    these tests assert on.
+    """
+    return summary.findings_by_dimension.get(str(dimension), 0)
 
 
 class TestRuleCatalogue:
@@ -93,7 +100,7 @@ class TestValidity:
         submission = _submission(db)
         _value(db, submission, "KPI-001", value=900.0, disaggregation={"sex": "total"})
         summary = run_validation(db, submission)
-        assert _score(summary, DQADimension.VALIDITY) == 100.0
+        assert _findings(summary, DQADimension.VALIDITY) == 0
 
 
 class TestIntegrity:
@@ -150,7 +157,7 @@ class TestTimeliness:
         _value(db, submission, "KPI-001", value=100.0)
         summary = run_validation(db, submission)
 
-        assert _score(summary, DQADimension.TIMELINESS) == 100.0
+        assert _findings(summary, DQADimension.TIMELINESS) == 0
         assert not _issues(summary, "TIM-001")
 
     def test_late_submission_loses_points_per_day(self, db):
@@ -162,9 +169,9 @@ class TestTimeliness:
         _value(db, submission, "KPI-001", value=100.0)
         summary = run_validation(db, submission)
 
-        assert _score(summary, DQADimension.TIMELINESS) == 70.0  # 100 - 3 points x 10 days
         issue = _issues(summary, "TIM-001")
         assert issue and "10 day(s)" in issue[0].message
+        assert _findings(summary, DQADimension.TIMELINESS) == 1
 
 
 class TestCompleteness:
@@ -175,7 +182,6 @@ class TestCompleteness:
         _value(db, submission, "KPI-004", value=50.0)
         summary = run_validation(db, submission)
 
-        assert _score(summary, DQADimension.COMPLETENESS) == 50.0
         missing = {issue.indicator_code for issue in _issues(summary, "COM-001")}
         assert missing == {"KPI-002", "KPI-003"}
 
@@ -187,7 +193,7 @@ class TestCompleteness:
         _value(db, submission, "KPI-004", value=50.0)
         summary = run_validation(db, submission)
 
-        assert _score(summary, DQADimension.COMPLETENESS) == 100.0
+        assert _findings(summary, DQADimension.COMPLETENESS) == 0
 
 
 class TestAccuracy:
@@ -230,35 +236,29 @@ class TestGating:
 
         assert submission.status == SubmissionStatus.VALIDATED
         assert submission.rejection_reason is None
-        assert submission.dqa_score > 90
+        assert submission.error_count == 0
 
-    def test_weak_dimension_caps_the_headline_grade(self, db):
-        """A high weighted mean must not hide one badly failing dimension."""
+    def test_a_mostly_unreported_return_is_not_hidden_by_what_it_did_report(self, db):
+        """One indicator out of four is three findings, not a high average.
+
+        A weighted mean over seven dimensions used to absorb this: the return
+        scored above 80 while three quarters of the framework was missing.
+        There is no mean left to hide behind -- the findings stand on their own.
+        """
         submission = _submission(db)
         _value(db, submission, "KPI-001", value=900.0)  # 1 of 4 expected indicators
         summary = run_validation(db, submission)
 
-        assert _score(summary, DQADimension.COMPLETENESS) < 60
-        assert summary.overall_score > 80
-        assert summary.grade in {"Fair", "Weak", "Poor"}
+        assert _findings(summary, DQADimension.COMPLETENESS) == 3
+        missing = {issue.indicator_code for issue in _issues(summary, "COM-001")}
+        assert missing == {"KPI-002", "KPI-003", "KPI-004"}
 
-    def test_scores_are_persisted_for_every_assessed_dimension(self, db):
-        """A dimension with no applicable checks is not persisted at all.
-
-        There is no number to record for it: nothing was checked, so neither
-        100 nor 0 would be true, and an absent row reads as "not assessed".
-        """
+    def test_no_dimension_score_is_written_any_more(self, db):
+        """Validating clears any score a previous version of this app stored."""
         submission = _submission(db)
         _value(db, submission, "KPI-001", value=100.0)
-        summary = run_validation(db, submission)
+        run_validation(db, submission)
 
         from app.models import DQAScore
 
-        stored = {
-            row.dimension
-            for row in db.query(DQAScore).filter_by(submission_id=submission.id)
-        }
-        assessed = {d.dimension for d in summary.dimensions if d.score is not None}
-        unassessed = {d.dimension for d in summary.dimensions if d.score is None}
-        assert stored == assessed
-        assert stored | unassessed == {str(d) for d in DQADimension}
+        assert not db.query(DQAScore).filter_by(submission_id=submission.id).all()

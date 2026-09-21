@@ -43,8 +43,11 @@ class Settings(BaseSettings):
     report_dir: Path = BASE_DIR / "storage" / "reports"
     max_upload_mb: int = 50
 
-    # --- Data quality thresholds ----------------------------------------
-    dqa_minimum_score: float = 60.0
+    # --- Validation thresholds -------------------------------------------
+    # A dqa_minimum_score once gated ingestion here. It is gone with the
+    # score: a pass rate over automated checks was never a fit basis for
+    # refusing a state's return, and a refused return is data the NPCU does
+    # not have. Findings are raised as queries instead.
     consistency_change_threshold_pct: float = 200.0
     accuracy_target_ratio_pct: float = 300.0
     outlier_zscore_threshold: float = 3.0

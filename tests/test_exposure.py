@@ -143,7 +143,7 @@ class TestVerdict:
     def test_a_material_finding_makes_a_return_unfit(self):
         assert (
             verdict_for_submission(
-                score=99.13,
+                has_data=True,
                 exposed_share=58.6,
                 material_findings=1,
                 open_findings=3,
@@ -155,7 +155,7 @@ class TestVerdict:
         """Borno's Q2 direct-reach figure fell by eight in a million."""
         assert (
             verdict_for_submission(
-                score=98.57,
+                has_data=True,
                 exposed_share=0.1,
                 material_findings=0,
                 open_findings=1,
@@ -166,7 +166,7 @@ class TestVerdict:
     def test_a_clean_return_is_fit(self):
         assert (
             verdict_for_submission(
-                score=100.0,
+                has_data=True,
                 exposed_share=0.0,
                 material_findings=0,
                 open_findings=0,
@@ -178,7 +178,7 @@ class TestVerdict:
         """Many small findings still add up to a return that cannot be used."""
         assert (
             verdict_for_submission(
-                score=97.0,
+                has_data=True,
                 exposed_share=42.0,
                 material_findings=0,
                 open_findings=9,
@@ -277,11 +277,24 @@ class TestDashboardSurfacesTheVerdict:
         assert "fitness" in tiles
         assert tiles["fitness"].status == str(FitnessVerdict.NOT_FIT)
 
-    def test_the_score_tile_says_what_it_is_not(self, db, collapse):
-        """A reader took "Excellent" as a verdict, so the tile disowns that."""
+    def test_the_board_counts_unusable_returns_instead_of_scoring_them(
+        self, db, collapse
+    ):
+        """There was a DQA score tile here, captioned to disown itself.
+
+        A tile that has to explain it is not a verdict should not be on the
+        board. What replaced it counts the returns a reader cannot rely on,
+        which is what the score was being read as saying.
+        """
+        from app.services.ingestion.pipeline import revalidate_period
+
         period = reference.get_period_by_code(db, "2026-Q1")
-        caption = self._tiles(db, period)["dqa_score"].caption
-        assert "not a verdict" in caption.lower()
+        revalidate_period(db, period)
+        tiles = self._tiles(db, period)
+
+        assert "dqa_score" not in tiles
+        assert tiles["returns_not_fit"].value >= 1
+        assert "not fit for use" in tiles["returns_not_fit"].caption
 
     def test_selecting_a_state_changes_the_figures(self, db, collapse):
         """The filter set a variable nothing read, so the board never moved."""
@@ -389,48 +402,48 @@ class TestEveryBoardHonoursTheStateFilter:
     """
 
     def test_the_quality_board_scopes_to_the_state(self, db, collapse):
-        from app.services import dqa
+        from app.services import returns
         from app.services.ingestion.pipeline import revalidate_period
 
         period = reference.get_period_by_code(db, "2026-Q1")
         revalidate_period(db, period)
 
-        national = dqa.national_summary(db, period)
-        scoped = dqa.national_summary(db, period, state_code="KD")
+        national = returns.national_returns(db, period)
+        scoped = returns.national_returns(db, period, state_code="KD")
 
         assert national.states_reported > scoped.states_reported
         assert scoped.states_reported == 1
-        assert scoped.scorecards[0].state_code == "KD"
+        assert scoped.returns[0].state_code == "KD"
 
     def test_the_scorecard_carries_the_verdict(self, db, collapse):
-        from app.services import dqa
+        from app.services import returns
         from app.services.ingestion.pipeline import revalidate_period
 
         period = reference.get_period_by_code(db, "2026-Q1")
         revalidate_period(db, period)
-        scoped = dqa.national_summary(db, period, state_code="KN")
-        card = scoped.scorecards[0]
+        scoped = returns.national_returns(db, period, state_code="KN")
+        card = scoped.returns[0]
         assert card.fitness_verdict == str(FitnessVerdict.NOT_FIT)
         assert card.exposed_share_pct is not None
 
     def test_the_national_board_counts_states_that_are_not_fit(self, db, collapse):
-        from app.services import dqa
+        from app.services import returns
         from app.services.ingestion.pipeline import revalidate_period
 
         period = reference.get_period_by_code(db, "2026-Q1")
         revalidate_period(db, period)
-        assert dqa.national_summary(db, period).states_not_fit >= 1
+        assert returns.national_returns(db, period).states_not_fit >= 1
 
     def test_two_states_do_not_produce_the_same_board(self, db, collapse):
         """The complaint that started this: every state looked identical."""
-        from app.services import dqa
+        from app.services import returns
         from app.services.ingestion.pipeline import revalidate_period
 
         period = reference.get_period_by_code(db, "2026-Q1")
         revalidate_period(db, period)
 
-        flagged = dqa.national_summary(db, period, state_code="KN").scorecards[0]
-        sound = dqa.national_summary(db, period, state_code="KD").scorecards[0]
+        flagged = returns.national_returns(db, period, state_code="KN").returns[0]
+        sound = returns.national_returns(db, period, state_code="KD").returns[0]
         assert flagged.fitness_verdict != sound.fitness_verdict
         assert flagged.exposed_share_pct != sound.exposed_share_pct
 

@@ -1,4 +1,11 @@
-"""Validation and DQA schemas."""
+"""Validation schemas: findings, fitness verdicts and reporting status.
+
+No score and no grade. Both were removed: the score was a pass rate over
+thousands of automated checks, so it sat near 100 for any plausible return,
+and readers took the grade it produced as an answer to "can I use this?".
+The fitness verdict answers that question directly, and scoring a return is
+work for a data quality assessment with a field visit behind it.
+"""
 
 from __future__ import annotations
 
@@ -24,18 +31,11 @@ class ValidationIssueRead(ORMModel):
     is_blocking: bool = False
 
 
-class DimensionScore(BaseModel):
+class DimensionFindings(BaseModel):
+    """How many findings fall in one area. A count, never a score."""
+
     dimension: str
-    #: NULL when nothing in this dimension could be checked. A dimension with
-    #: no applicable checks is not a perfect score; it is an unanswered
-    #: question, and it is left out of the weighted mean rather than carried
-    #: into it as a free 100.
-    score: float | None
-    weight: float
-    checks_run: int = 0
-    checks_failed: int = 0
-    grade: str | None = None
-    details: dict = Field(default_factory=dict)
+    findings: int = 0
 
 
 class ValidationSummary(BaseModel):
@@ -45,19 +45,23 @@ class ValidationSummary(BaseModel):
     error_count: int = 0
     warning_count: int = 0
     info_count: int = 0
-    overall_score: float = 0.0
-    grade: str = "No data"
-    #: Figures counting towards the national totals, as a percentage of those
-    #: reported. The score is a per-check pass rate and cannot see this.
+    #: Figures fit for use, as a percentage of those reported. Every figure
+    #: counts towards the national totals whatever its label; this says how
+    #: much of the return a reader can lean on.
     usable_share_pct: float | None = None
-    #: Why the grade sits below the score's own band, when it does.
-    grade_note: str | None = None
-    dimensions: list[DimensionScore] = Field(default_factory=list)
+    #: Findings per area -- integrity, accuracy, completeness and so on. A
+    #: count of what needs looking at, making no claim about the whole.
+    findings_by_dimension: dict[str, int] = Field(default_factory=dict)
     issues: list[ValidationIssueRead] = Field(default_factory=list)
 
 
-class DQAScorecard(BaseModel):
-    """State-level DQA scorecard for one reporting period."""
+class StateReturn(BaseModel):
+    """How one state's return for one period stands.
+
+    What replaced the DQA scorecard. The headline is the fitness verdict, not
+    a number: a state that scored "Excellent" while reporting 127 schools
+    against the 5,960 it reported the quarter before is the reason.
+    """
 
     state_code: str
     state_name: str
@@ -67,57 +71,57 @@ class DQAScorecard(BaseModel):
     status: str | None = None
     submitted_at: datetime | None = None
     days_late: int | None = None
-    overall_score: float | None = None
-    grade: str = "No data"
     figures_reported: int = 0
     #: Figures with no open finding against them. Every figure counts towards
     #: the national totals regardless; this says how many are unencumbered.
     figures_counting: int = 0
     usable_share_pct: float | None = None
     #: Whether the return can be relied on: FIT, FIT WITH NOTES, NOT FIT FOR
-    #: USE. This, not the grade, is what a reader should act on.
+    #: USE, NO DATA. This is the headline a reader should act on.
     fitness_verdict: str | None = None
+    #: Why the verdict is what it is. An unexplained verdict is worthless.
+    verdict_note: str | None = None
     #: Share of this state's contribution to the national totals that rests on
     #: figures the validation could not vouch for.
     exposed_share_pct: float | None = None
-    grade_note: str | None = None
-    dimensions: list[DimensionScore] = Field(default_factory=list)
+    findings_by_dimension: dict[str, int] = Field(default_factory=dict)
     error_count: int = 0
     warning_count: int = 0
     top_issues: list[ValidationIssueRead] = Field(default_factory=list)
 
 
-class NationalDQASummary(BaseModel):
+class NationalReturns(BaseModel):
+    """How the period's returns stand nationally."""
+
     period_code: str
     states_expected: int
     states_reported: int
     states_approved: int
     reporting_rate_pct: float
     on_time_rate_pct: float
-    national_score: float | None = None
     figures_reported: int = 0
     figures_counting: int = 0
     usable_share_pct: float | None = None
     #: How many of the assessed states cannot be relied on for this period.
+    #: This is the national headline, in place of an average score.
     states_not_fit: int = 0
-    grade_note: str | None = None
-    grade: str = "No data"
-    dimension_averages: list[DimensionScore] = Field(default_factory=list)
-    cohort_scores: list[CohortDQASummary] = Field(default_factory=list)
-    scorecards: list[DQAScorecard] = Field(default_factory=list)
+    states_fit_with_notes: int = 0
+    states_fit: int = 0
+    findings_by_dimension: dict[str, int] = Field(default_factory=dict)
+    cohort_returns: list[CohortReturns] = Field(default_factory=list)
+    returns: list[StateReturn] = Field(default_factory=list)
     common_issues: list[dict] = Field(default_factory=list)
 
 
-class CohortDQASummary(BaseModel):
+class CohortReturns(BaseModel):
     cohort_code: str
     cohort_name: str
     states_expected: int
     states_reported: int
     reporting_rate_pct: float
     on_time_rate_pct: float
-    average_score: float | None = None
-    grade: str = "No data"
-    dimension_averages: list[DimensionScore] = Field(default_factory=list)
+    states_not_fit: int = 0
+    usable_share_pct: float | None = None
 
 
 class ValidationRuleRead(ORMModel):
@@ -139,4 +143,4 @@ class ValidationRuleUpdate(BaseModel):
     is_active: bool | None = None
 
 
-NationalDQASummary.model_rebuild()
+NationalReturns.model_rebuild()

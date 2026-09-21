@@ -449,7 +449,7 @@ window.AgileCharts = (function () {
       }
     });
     max = max || 100;
-    // Values that cluster in a narrow band (DQA scores, say) need the ramp to
+    // Values that cluster in a narrow band need the ramp to
     // span the observed range, or every cell renders the same shade.
     const min = options.min || 0;
     const span = Math.max(max - min, 1e-9);

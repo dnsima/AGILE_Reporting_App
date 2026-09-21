@@ -171,8 +171,6 @@ class RuleDefinition:
     is_blocking: bool
     default_config: dict[str, Any]
     fn: RuleFn
-    #: How many checks this rule contributes to its dimension's denominator.
-    weight_fn: Callable[[RuleContext], int]
 
 
 RULE_REGISTRY: dict[str, RuleDefinition] = {}
@@ -187,7 +185,6 @@ def rule(
     blocking: bool = False,
     description: str = "",
     config: dict[str, Any] | None = None,
-    weight: Callable[[RuleContext], int] | None = None,
 ) -> Callable[[RuleFn], RuleFn]:
     def decorator(fn: RuleFn) -> RuleFn:
         RULE_REGISTRY[code] = RuleDefinition(
@@ -199,15 +196,10 @@ def rule(
             is_blocking=blocking,
             default_config=config or {},
             fn=fn,
-            weight_fn=weight or (lambda ctx: max(len(ctx.values), 1)),
         )
         return fn
 
     return decorator
-
-
-def _one(_: RuleContext) -> int:
-    return 1
 
 
 def _numeric_values(ctx: RuleContext) -> Iterator[tuple[IndicatorValue, Indicator, float]]:
@@ -315,11 +307,6 @@ def _values_with_disaggregation(ctx: RuleContext) -> list[IndicatorValue]:
     return [value for value in ctx.values if value.disaggregation]
 
 
-def _sized(candidates) -> Callable[[RuleContext], int]:
-    """Weight a rule by the number of figures it can actually examine."""
-    return lambda ctx: len(candidates(ctx))
-
-
 # ==========================================================================
 # INTEGRITY
 # ==========================================================================
@@ -330,7 +317,6 @@ def _sized(candidates) -> Callable[[RuleContext], int]:
     severity=Severity.ERROR,
     blocking=True,
     description="For ratio-style indicators the numerator must be a subset of the denominator.",
-    weight=_sized(_with_numerator_and_denominator),
 )
 def numerator_within_denominator(ctx: RuleContext) -> Iterator[Finding]:
     for value in _with_numerator_and_denominator(ctx):
@@ -357,7 +343,6 @@ def numerator_within_denominator(ctx: RuleContext) -> Iterator[Finding]:
     severity=Severity.WARNING,
     description="A reported percentage should agree with its own numerator and denominator.",
     config={"tolerance_pct_points": 0.5},
-    weight=_sized(_percent_with_arithmetic),
 )
 def percentage_arithmetic(ctx: RuleContext) -> Iterator[Finding]:
     tolerance = float(ctx.config("INT-002", "tolerance_pct_points", 0.5))
@@ -385,7 +370,6 @@ def percentage_arithmetic(ctx: RuleContext) -> Iterator[Finding]:
     severity=Severity.ERROR,
     blocking=True,
     description="Disaggregated counts must not exceed the total they are drawn from.",
-    weight=lambda ctx: len(SUBSET_RELATIONSHIPS),
 )
 def subset_within_parent(ctx: RuleContext) -> Iterator[Finding]:
     totals: dict[str, float] = defaultdict(float)
@@ -419,7 +403,6 @@ def subset_within_parent(ctx: RuleContext) -> Iterator[Finding]:
     DQADimension.INTEGRITY,
     severity=Severity.WARNING,
     description="Rows the mapper could not resolve are dropped and never reach analysis.",
-    weight=_one,
 )
 def rows_fully_mapped(ctx: RuleContext) -> Iterator[Finding]:
     if ctx.submission.unmapped_count > 0:
@@ -447,7 +430,6 @@ def rows_fully_mapped(ctx: RuleContext) -> Iterator[Finding]:
     ),
     config={"tolerance": 0.5},
     # Composites this state actually reported, not every one in the catalogue.
-    weight=_sized(_composite_values),
 )
 def composite_equals_parts(ctx: RuleContext) -> Iterator[Finding]:
     tolerance = float(ctx.config("INT-005", "tolerance", 0.5))
@@ -495,7 +477,6 @@ def composite_equals_parts(ctx: RuleContext) -> Iterator[Finding]:
         "girls benefiting."
     ),
     config={"tolerance": 0.5},
-    weight=lambda ctx: len(IDENTITY_RELATIONSHIPS),
 )
 def declared_identity_holds(ctx: RuleContext) -> Iterator[Finding]:
     tolerance = float(ctx.config("INT-006", "tolerance", 0.5))
@@ -543,7 +524,6 @@ def declared_identity_holds(ctx: RuleContext) -> Iterator[Finding]:
         "matching to the digit usually means one field was copied into the "
         "other rather than measured."
     ),
-    weight=lambda ctx: len(DISTINCT_RELATIONSHIPS),
 )
 def distinct_indicators_differ(ctx: RuleContext) -> Iterator[Finding]:
     totals: dict[str, float] = {}
@@ -586,7 +566,6 @@ def distinct_indicators_differ(ctx: RuleContext) -> Iterator[Finding]:
         "stopped."
     ),
     config={"floor": 1.0},
-    weight=_sized(_values_with_previous),
 )
 def zero_after_activity(ctx: RuleContext) -> Iterator[Finding]:
     """Adamawa reported 407 schools on climate awareness in Q1, and 0 in Q2."""
@@ -652,7 +631,6 @@ def within_applicable_scope(ctx: RuleContext) -> Iterator[Finding]:
     DQADimension.TIMELINESS,
     severity=Severity.WARNING,
     description="Submissions are due within the window configured on the reporting period.",
-    weight=_one,
 )
 def submitted_on_time(ctx: RuleContext) -> Iterator[Finding]:
     uploaded = ctx.submission.uploaded_at
@@ -679,7 +657,6 @@ def submitted_on_time(ctx: RuleContext) -> Iterator[Finding]:
     DQADimension.TIMELINESS,
     severity=Severity.WARNING,
     description="Flags data arriving against a period the NPCU has already closed.",
-    weight=_one,
 )
 def period_still_open(ctx: RuleContext) -> Iterator[Finding]:
     if not ctx.period.is_open:
@@ -701,7 +678,6 @@ def period_still_open(ctx: RuleContext) -> Iterator[Finding]:
     severity=Severity.WARNING,
     description="Achievement far above target usually signals a unit or period error.",
     config={"max_ratio_pct": 300.0},
-    weight=_sized(_values_with_target),
 )
 def plausible_versus_target(ctx: RuleContext) -> Iterator[Finding]:
     ceiling = float(
@@ -733,9 +709,6 @@ def plausible_versus_target(ctx: RuleContext) -> Iterator[Finding]:
     severity=Severity.WARNING,
     description="Compares the reading with this state's previous readings for the indicator.",
     config={"zscore_threshold": 3.0, "min_history": 3},
-    weight=lambda ctx: len(
-        _values_with_history(ctx, int(ctx.config("ACC-002", "min_history", 3)))
-    ),
 )
 def outlier_against_history(ctx: RuleContext) -> Iterator[Finding]:
     threshold = float(
@@ -775,7 +748,6 @@ def outlier_against_history(ctx: RuleContext) -> Iterator[Finding]:
     severity=Severity.ERROR,
     blocking=True,
     description="A non-zero numerator with a zero or missing denominator cannot be computed.",
-    weight=_sized(_values_needing_denominator),
 )
 def denominator_usable(ctx: RuleContext) -> Iterator[Finding]:
     for value, indicator in _values_needing_denominator(ctx):
@@ -804,7 +776,6 @@ def denominator_usable(ctx: RuleContext) -> Iterator[Finding]:
         "unit error or a double count rather than genuine concentration."
     ),
     config={"max_share_pct": 60.0, "min_states": 5},
-    weight=_sized(_additive_with_national),
 )
 def state_concentration(ctx: RuleContext) -> Iterator[Finding]:
     ceiling = float(ctx.config("ACC-004", "max_share_pct", 60.0))
@@ -850,7 +821,6 @@ def _is_additive(indicator: Indicator) -> bool:
     DQADimension.COMPLETENESS,
     severity=Severity.WARNING,
     description="Every indicator the state is obliged to report this period carries a value.",
-    weight=lambda ctx: max(len(ctx.expected_indicator_ids), 1),
 )
 def expected_indicators_present(ctx: RuleContext) -> Iterator[Finding]:
     missing = ctx.expected_indicator_ids - ctx.reported_indicator_ids
@@ -874,7 +844,6 @@ def expected_indicators_present(ctx: RuleContext) -> Iterator[Finding]:
     DQADimension.COMPLETENESS,
     severity=Severity.WARNING,
     description="Weighted national aggregation needs the components, not just the percentage.",
-    weight=_sized(_values_requiring_pair),
 )
 def components_supplied(ctx: RuleContext) -> Iterator[Finding]:
     for value, indicator in _values_requiring_pair(ctx):
@@ -905,7 +874,6 @@ def components_supplied(ctx: RuleContext) -> Iterator[Finding]:
     severity=Severity.WARNING,
     description="Very large swings between consecutive periods are flagged for verification.",
     config={"threshold_pct": 200.0, "drop_threshold_pct": 50.0},
-    weight=_sized(_values_with_previous),
 )
 def period_over_period_change(ctx: RuleContext) -> Iterator[Finding]:
     """Rises and falls need separate bands, because a fall cannot exceed 100%.
@@ -956,7 +924,6 @@ def period_over_period_change(ctx: RuleContext) -> Iterator[Finding]:
     severity=Severity.ERROR,
     blocking=True,
     description="A cumulative total cannot fall below the value reported in an earlier period.",
-    weight=_sized(_cumulative_with_previous),
 )
 def cumulative_monotonic(ctx: RuleContext) -> Iterator[Finding]:
     for value, indicator, effective in _cumulative_with_previous(ctx):
@@ -1048,7 +1015,6 @@ def value_in_range(ctx: RuleContext) -> Iterator[Finding]:
     DQADimension.VALIDITY,
     severity=Severity.INFO,
     description="Headcount indicators reported with decimals are rounded on ingestion.",
-    weight=_sized(_whole_number_values),
 )
 def counts_are_integers(ctx: RuleContext) -> Iterator[Finding]:
     for value, indicator, effective in _whole_number_values(ctx):
@@ -1072,7 +1038,6 @@ def counts_are_integers(ctx: RuleContext) -> Iterator[Finding]:
     DQADimension.VALIDITY,
     severity=Severity.WARNING,
     description="Keeps sex, location and school-level labels comparable across states.",
-    weight=_sized(_values_with_disaggregation),
 )
 def disaggregation_vocabulary(ctx: RuleContext) -> Iterator[Finding]:
     for value in _values_with_disaggregation(ctx):
@@ -1140,7 +1105,6 @@ def no_duplicate_rows(ctx: RuleContext) -> Iterator[Finding]:
     DQADimension.UNIQUENESS,
     severity=Severity.WARNING,
     description="An identical file already on record usually means an accidental re-upload.",
-    weight=_one,
 )
 def file_not_duplicated(ctx: RuleContext) -> Iterator[Finding]:
     if ctx.duplicate_submission_ids:
@@ -1161,7 +1125,6 @@ def file_not_duplicated(ctx: RuleContext) -> Iterator[Finding]:
     severity=Severity.ERROR,
     blocking=True,
     description="Superseded versions must be retired so analysis reads a single source of truth.",
-    weight=_one,
 )
 def single_current_submission(ctx: RuleContext) -> Iterator[Finding]:
     # The pipeline retires prior versions before validating; this rule catches a
@@ -1211,7 +1174,6 @@ def _reconciled_at_all(ctx: RuleContext) -> int:
         "within the period is the months added together, a rate is the position at the "
         "period's end."
     ),
-    weight=_judged_lines,
 )
 def tracker_agrees_with_framework(ctx: RuleContext) -> Iterator[Finding]:
     for line in ctx.reconciled(ReconciliationStatus.MISMATCH):
@@ -1249,7 +1211,6 @@ def tracker_agrees_with_framework(ctx: RuleContext) -> Iterator[Finding]:
         "A figure the state reported in the tracker but left out of the quarterly return "
         "is a gap in the framework submission, not an absence of data."
     ),
-    weight=_reconciled_at_all,
 )
 def framework_covers_the_tracker(ctx: RuleContext) -> Iterator[Finding]:
     for line in ctx.reconciled(ReconciliationStatus.FRAMEWORK_MISSING):
@@ -1273,7 +1234,6 @@ def framework_covers_the_tracker(ctx: RuleContext) -> Iterator[Finding]:
         "An indicator reported for the quarter but absent from every month of a complete "
         "tracker has no monthly evidence behind it."
     ),
-    weight=_reconciled_at_all,
 )
 def tracker_covers_the_framework(ctx: RuleContext) -> Iterator[Finding]:
     # Only once every month is in: until then the figure may still arrive.

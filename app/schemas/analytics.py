@@ -150,8 +150,11 @@ class CohortSummary(BaseModel):
     reporting_rate_pct: float
     on_time_rate_pct: float
     completeness_pct: float
-    average_dqa_score: float | None = None
-    dqa_grade: str = "No data"
+    #: How many of this cohort's states cannot be relied on this period. This
+    #: replaced an average DQA score: averaging a pass rate across states
+    #: hides the state that broke, which is the one a reader is looking for.
+    states_not_fit: int = 0
+    usable_share_pct: float | None = None
     average_achievement_pct: float | None = None
     indicators_on_track: int = 0
     indicators_assessed: int = 0

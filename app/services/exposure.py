@@ -446,14 +446,16 @@ def apply_verdicts(db: Session, period: ReportingPeriod) -> dict[str, int]:
         if entry is None:
             continue
         open_findings = entry.figures_unfit + entry.figures_queried
+        material = len(entry.material_findings)
         verdict = verdict_for_submission(
-            score=submission.dqa_score,
+            has_data=entry.figures_reported > 0,
             exposed_share=entry.exposed_share,
-            material_findings=len(entry.material_findings),
+            material_findings=material,
             open_findings=open_findings,
         )
         submission.fitness_verdict = str(verdict)
         submission.exposed_share = round(entry.exposed_share, 2)
+        submission.material_findings = material
         tally[str(verdict)] += 1
 
     db.flush()

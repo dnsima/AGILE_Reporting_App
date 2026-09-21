@@ -67,8 +67,10 @@ class SubmissionRead(ORMModel):
     row_count: int
     mapped_count: int
     unmapped_count: int
-    dqa_score: float | None = None
-    dqa_grade: str | None = None
+    #: The headline: FIT, FIT WITH NOTES, NOT FIT FOR USE, NO DATA. There was
+    #: a DQA score and grade here; both were removed as answering the wrong
+    #: question.
+    fitness_verdict: str | None = None
     error_count: int
     warning_count: int
     open_query_count: int = 0

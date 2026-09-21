@@ -31,7 +31,10 @@ class ReportRequest(BaseModel):
     )
     category_codes: list[str] | None = None
     formats: list[ReportFormat] = Field(default_factory=lambda: [ReportFormat.MARKDOWN])
-    include_dqa: bool = True
+    #: The section on what the validation found and which returns can be
+    #: relied on. Named for the DQA section it replaced; it no longer carries
+    #: a score or a grade.
+    include_data_quality: bool = True
     #: The section listing what remains unconfirmed. On by default: a report
     #: that prints a provisional total without saying so is the failure this
     #: section exists to prevent.

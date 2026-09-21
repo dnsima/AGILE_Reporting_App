@@ -256,7 +256,11 @@ class TestIngestion:
         assert body["submission"]["status"] == "APPROVED"
         assert body["submission"]["mapped_count"] == 4
         assert body["validation"]["error_count"] == 0
-        assert body["submission"]["dqa_score"] > 90
+        # No score and no grade: the headline is whether the return can be used.
+        assert body["submission"]["fitness_verdict"] in {
+            "FIT", "FIT WITH NOTES", "NOT FIT FOR USE", None
+        }
+        assert "dqa_score" not in body["submission"]
 
     def test_diagnostics_explain_the_mapping(self, client, npcu_headers):
         diagnostics = _upload(client, npcu_headers).json()["diagnostics"]
@@ -457,13 +461,15 @@ class TestAnalysisEndpoints:
         assert by_code["ORIGINAL"]["states_reporting"] == 1
         assert by_code["ORIGINAL"]["reporting_rate_pct"] == 50.0
 
-    def test_dqa_scorecard_and_national_summary(self, client, ingested):
+    def test_state_return_and_national_returns(self, client, ingested):
+        """No score, no grade: a verdict and the findings behind it."""
         card = client.get(
-            "/api/v1/quality/scorecards/KN", headers=ingested, params={"period": "2026-Q1"}
+            "/api/v1/quality/returns/KN", headers=ingested, params={"period": "2026-Q1"}
         ).json()
         assert card["state_name"] == "Kano"
-        # A dimension nothing could be checked in is absent, not scored 100.
-        assert {dim["dimension"] for dim in card["dimensions"]} <= {
+        assert "overall_score" not in card
+        assert "grade" not in card
+        assert {area for area in card["findings_by_dimension"]} <= {
             "INTEGRITY", "TIMELINESS", "ACCURACY", "COMPLETENESS",
             "CONSISTENCY", "VALIDITY", "UNIQUENESS",
         }
@@ -473,7 +479,8 @@ class TestAnalysisEndpoints:
         ).json()
         assert national["states_expected"] == 4
         assert national["states_reported"] == 2
-        assert len(national["scorecards"]) == 4
+        assert len(national["returns"]) == 4
+        assert "national_score" not in national
 
     def test_dashboard_overview(self, client, ingested):
         body = client.get(
@@ -481,8 +488,9 @@ class TestAnalysisEndpoints:
         ).json()
         assert body["period_code"] == "2026-Q1"
         assert {tile["key"] for tile in body["tiles"]} >= {
-            "reporting_rate", "approved_rate", "dqa_score", "average_achievement",
+            "reporting_rate", "approved_rate", "returns_not_fit", "average_achievement",
         }
+        assert "dqa_score" not in {tile["key"] for tile in body["tiles"]}
         assert body["reporting_status"]["states_expected"] == 4
 
     def test_unknown_indicator_is_a_clean_404(self, client, npcu_headers):
@@ -528,7 +536,7 @@ class TestReporting:
         assert headings[0] == "## 1. Reporting status and coverage"
         assert [heading.split(". ", 1)[1] for heading in headings] == [
             "Reporting status and coverage",
-            "Data quality assessment",
+            "Data quality",
             "Figures under query",
             "KPI performance",
             "State performance and contribution to national results",

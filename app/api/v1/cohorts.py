@@ -8,9 +8,9 @@ from app.api.deps import CurrentPrincipal, DbSession, require
 from app.core.enums import Permission
 from app.core.errors import NotFoundError
 from app.schemas.analytics import CohortComparison, CohortSummary
-from app.schemas.validation import CohortDQASummary
+from app.schemas.validation import CohortReturns
 from app.services import cohort as cohort_service
-from app.services import dqa, reference
+from app.services import reference, returns
 
 router = APIRouter(
     prefix="/cohorts",
@@ -75,15 +75,15 @@ def within_cohort(
 
 
 @router.get(
-    "/{cohort_code}/dqa",
-    response_model=CohortDQASummary,
-    summary="Cohort-level DQA summary",
+    "/{cohort_code}/returns",
+    response_model=CohortReturns,
+    summary="How a cohort's returns for a period stand",
 )
-def cohort_dqa(
+def cohort_return_status(
     cohort_code: str,
     db: DbSession,
     principal: CurrentPrincipal,
     period: str | None = None,
-) -> CohortDQASummary:
+) -> CohortReturns:
     cohort = reference.get_cohort_by_code(db, cohort_code)
-    return dqa.cohort_summary(db, cohort, _resolve_period(db, period))
+    return returns.cohort_returns(db, cohort, _resolve_period(db, period))

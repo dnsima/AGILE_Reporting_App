@@ -13,22 +13,22 @@ from statistics import fmean
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.enums import DQADimension, grade_for_score
+from app.core.enums import FitnessVerdict
 from app.models import Cohort, Indicator, ReportingPeriod
 from app.schemas.analytics import CohortComparison, CohortSummary
-from app.schemas.validation import DQAScorecard
-from app.services import analytics, dqa, reference
+from app.schemas.validation import StateReturn
+from app.services import analytics, reference, returns
 
 
-def _completeness_pct(cards: list[DQAScorecard]) -> float:
-    """Mean completeness across the states that submitted."""
-    scores = [
-        dimension.score
-        for card in cards
-        for dimension in card.dimensions
-        if dimension.dimension == DQADimension.COMPLETENESS
-    ]
-    return round(fmean(scores), 2) if scores else 0.0
+def _completeness_pct(rows: list[StateReturn]) -> float:
+    """Share of the framework the cohort's states actually answered.
+
+    Counted from the figures themselves rather than read off a completeness
+    score, because the scores went with the grade.
+    """
+    reported = sum(row.figures_reported for row in rows)
+    expected = len(rows) * max((row.figures_reported for row in rows), default=0)
+    return round(100.0 * reported / expected, 2) if expected else 0.0
 
 
 def cohort_summaries(
@@ -40,7 +40,7 @@ def cohort_summaries(
     """One summary row per financing cohort for a reporting period."""
     indicators = indicators or reference.active_indicators(db)
     states = reference.active_states(db)
-    scorecards = {state.code: dqa.state_scorecard(db, state, period) for state in states}
+    state_returns = {state.code: returns.state_return(db, state, period) for state in states}
     cohorts = sorted(db.scalars(select(Cohort)), key=lambda c: c.sort_order)
 
     # Per-cohort contribution to national results, averaged over indicators.
@@ -56,9 +56,8 @@ def cohort_summaries(
         members = [state for state in states if state.cohort_id == cohort.id]
         if not members:
             continue
-        cards = [scorecards[state.code] for state in members]
+        cards = [state_returns[state.code] for state in members]
         submitted = [card for card in cards if card.submission_id is not None]
-        scored = [card for card in submitted if card.overall_score is not None]
         on_time = [card for card in submitted if (card.days_late or 0) == 0]
 
         board = analytics.scorecard(
@@ -72,7 +71,8 @@ def cohort_summaries(
             if state_board.average_achievement_pct is not None:
                 state_averages[state.name] = state_board.average_achievement_pct
 
-        average_dqa = round(fmean(card.overall_score for card in scored), 2) if scored else None
+        reported = sum(card.figures_reported for card in submitted)
+        counting = sum(card.figures_counting for card in submitted)
         contributions = contribution_totals.get(cohort.code, [])
 
         summaries.append(
@@ -83,9 +83,14 @@ def cohort_summaries(
                 states_reporting=len(submitted),
                 reporting_rate_pct=round(len(submitted) / len(members) * 100, 2),
                 on_time_rate_pct=round(len(on_time) / len(members) * 100, 2),
-                completeness_pct=_completeness_pct(scored),
-                average_dqa_score=average_dqa,
-                dqa_grade=grade_for_score(average_dqa),
+                completeness_pct=_completeness_pct(submitted),
+                states_not_fit=sum(
+                    1 for card in submitted
+                    if card.fitness_verdict == str(FitnessVerdict.NOT_FIT)
+                ),
+                usable_share_pct=(
+                    round(100.0 * counting / reported, 1) if reported else None
+                ),
                 average_achievement_pct=board.average_achievement_pct,
                 indicators_on_track=board.indicators_on_track,
                 indicators_assessed=board.indicators_with_target,
@@ -136,7 +141,7 @@ def within_cohort_ranking(
         board = analytics.scorecard(
             db, period, scope="STATE", state_code=state.code, indicators=indicators
         )
-        card = dqa.state_scorecard(db, state, period)
+        card = returns.state_return(db, state, period)
         rows.append(
             {
                 "state_code": state.code,
@@ -145,8 +150,8 @@ def within_cohort_ranking(
                 "average_achievement_pct": board.average_achievement_pct,
                 "indicators_on_track": board.indicators_on_track,
                 "indicators_with_data": board.indicators_with_data,
-                "dqa_score": card.overall_score,
-                "dqa_grade": card.grade,
+                "fitness_verdict": card.fitness_verdict,
+                "open_findings": card.error_count + card.warning_count,
                 "days_late": card.days_late,
                 "reported": card.submission_id is not None,
             }

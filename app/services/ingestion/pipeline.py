@@ -364,12 +364,12 @@ def ingest_upload(
         period_id=period.id,
         summary=(
             f"Ingested {filename} for {state.code}/{period.code} (v{version}): "
-            f"{mapping.mapped_rows} rows mapped, DQA {submission.dqa_score}, "
+            f"{mapping.mapped_rows} rows mapped, {summary.error_count} errors, "
             f"status {submission.status}."
         ),
         after={
             "status": submission.status,
-            "dqa_score": submission.dqa_score,
+            "verdict": submission.fitness_verdict,
             "errors": summary.error_count,
             "warnings": summary.warning_count,
             "file_hash": digest,
@@ -384,7 +384,7 @@ def ingest_upload(
             "cohort": state.cohort.code if state.cohort else None,
             "period": period.code,
             "status": submission.status,
-            "dqa_score": submission.dqa_score,
+            "verdict": submission.fitness_verdict,
         },
     )
     return submission, diagnostics, summary
@@ -504,7 +504,7 @@ def ingest_manual(
             f"API submission for {state.code}/{period.code} (v{version}): "
             f"{len(mapped)} values, status {submission.status}."
         ),
-        after={"status": submission.status, "dqa_score": submission.dqa_score},
+        after={"status": submission.status, "verdict": submission.fitness_verdict},
     )
     event_bus.publish(
         "submission.ingested",
@@ -513,7 +513,7 @@ def ingest_manual(
             "state": state.code,
             "period": period.code,
             "status": submission.status,
-            "dqa_score": submission.dqa_score,
+            "verdict": submission.fitness_verdict,
         },
     )
     return submission, diagnostics, summary
@@ -824,7 +824,7 @@ def revalidate_submission(db: Session, submission: Submission, actor: User | Non
         state_id=submission.state_id,
         period_id=submission.period_id,
         summary=f"Re-validated submission #{submission.id}: DQA {summary.overall_score}.",
-        after={"dqa_score": summary.overall_score, "status": submission.status},
+        after={"errors": summary.error_count, "status": submission.status},
     )
     event_bus.publish("submission.revalidated", {"submission_id": submission.id})
     return summary

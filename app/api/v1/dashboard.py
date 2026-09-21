@@ -133,12 +133,12 @@ def state_rankings(
 
 
 @router.get(
-    "/dqa-heatmap",
+    "/findings-heatmap",
     response_model=dict,
-    summary="States by periods DQA heatmap",
+    summary="States by periods, coloured by open findings",
     dependencies=[Depends(require(Permission.ANALYTICS_READ))],
 )
-def dqa_heatmap(
+def findings_heatmap(
     db: DbSession,
     principal: CurrentPrincipal,
     periods: int = Query(default=6, ge=1, le=24),
@@ -146,7 +146,7 @@ def dqa_heatmap(
         default=None, description="Keep the columns inside one period family"
     ),
 ) -> dict:
-    return dashboard_service.dqa_heatmap(
+    return dashboard_service.findings_heatmap(
         db, limit=periods, period_type=str(period_type) if period_type else None
     )
 

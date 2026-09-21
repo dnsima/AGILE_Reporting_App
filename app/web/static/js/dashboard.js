@@ -345,7 +345,7 @@
       "<strong>" + (event.type || "update").replace("submission.", "") + "</strong> " +
       (payload.state ? payload.state + " · " : "") +
       (payload.period ? payload.period + " · " : "") +
-      (payload.dqa_score !== undefined && payload.dqa_score !== null ? "DQA " + payload.dqa_score : "") +
+      (payload.verdict || "") +
       "</span>";
     feed.prepend(item);
     while (feed.children.length > 25) feed.removeChild(feed.lastChild);
@@ -888,8 +888,7 @@
         { label: "Ver", key: "version", num: true },
         { label: "Status", render: (r) => badge(r.status) },
         { label: "Rows", key: "mapped_count", num: true },
-        { label: "DQA", num: true, render: (r) => num(r.dqa_score) },
-        { label: "Grade", render: (r) => badge(r.dqa_grade) },
+        { label: "Fitness", render: (r) => badge(r.fitness_verdict || "not assessed") },
         { label: "Errors", key: "error_count", num: true },
         { label: "Warnings", key: "warning_count", num: true },
         {
@@ -949,7 +948,7 @@
       '<div class="kv">' +
       "<div><dt>Submission</dt><dd>#" + s.id + " v" + s.version + "</dd></div>" +
       "<div><dt>Status</dt><dd>" + badge(s.status) + "</dd></div>" +
-      "<div><dt>DQA score</dt><dd>" + num(s.dqa_score) + "</dd></div>" +
+      "<div><dt>Fitness</dt><dd>" + badge(s.fitness_verdict || "not assessed") + "</dd></div>" +
       "<div><dt>Rows mapped</dt><dd>" + s.mapped_count + "/" + s.row_count + "</dd></div>" +
       "<div><dt>Errors</dt><dd>" + s.error_count + "</dd></div>" +
       "<div><dt>Warnings</dt><dd>" + s.warning_count + "</dd></div>" +
@@ -1067,7 +1066,7 @@
       scope_ref: scope === "NATIONAL" ? null : $("report-scope-ref").value,
       category_codes: $("report-category").value ? [$("report-category").value] : null,
       formats: formats.length ? formats : ["markdown"],
-      include_dqa: $("report-dqa").checked,
+      include_data_quality: $("report-dqa").checked,
       include_queries: $("report-queries").checked,
       include_trends: $("report-trends").checked,
       include_narratives: $("report-narratives").checked,

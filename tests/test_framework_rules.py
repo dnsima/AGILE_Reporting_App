@@ -235,10 +235,8 @@ class TestApplicability:
         _value(db, submission, expected, 10.0)
 
         summary = run_validation(db, submission)
-        completeness = next(
-            d for d in summary.dimensions if d.dimension == "COMPLETENESS"
-        )
-        assert completeness.score == 100.0
+        # The state is not asked about C2.2b, so not reporting it is not a gap.
+        assert summary.findings_by_dimension.get("COMPLETENESS", 0) == 0
         assert not _issues(summary, "COM-001")
 
 

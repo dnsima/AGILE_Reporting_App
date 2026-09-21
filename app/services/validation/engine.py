@@ -1,22 +1,22 @@
-"""Runs the rule catalogue over a submission and scores the seven DQA dimensions.
+"""Runs the rule catalogue over a submission and records what it finds.
 
-Scoring
--------
-Five dimensions (integrity, accuracy, consistency, validity, uniqueness) use a
-penalty model: every rule contributes a number of *checks* to its dimension and
-each finding costs a fraction of one check according to its severity, so a
-dimension's score is ``100 * (1 - penalty / checks)``.
+There is no score and no grade. There was: seven weighted dimensions combined
+into a 0-100 number and mapped onto Excellent/Good/Fair/Weak/Poor. It was a
+pass rate over thousands of automated checks, so it sat near 100 for any
+plausible return -- Gombe scored 99.13 in a quarter where it reported 127
+schools against 5,960 the quarter before -- and readers took "Excellent" as an
+answer to "can I use this?". Capping the grade by the weakest dimension and by
+the share of figures under query helped, but the number underneath still
+answered the wrong question.
 
-Two dimensions are measured directly because a penalty model would understate
-them:
+So the engine now reports findings and nothing else. What a reader needs is
+the finding, the state it belongs to, and what it does to the national figure;
+those are the query, the fitness verdict and the exposure calculation. Scoring
+a return is work for a data quality assessment with a field visit behind it,
+and belongs in a subsystem of its own.
 
-* **completeness** is the share of expected indicators actually reported;
-* **timeliness** decays from 100 by a fixed number of points per day late.
-
-The seven scores are combined into one weighted mean. Because a mean can hide a
-single badly failing dimension, the headline *grade* is additionally capped by
-the weakest dimension (see ``grade_for_submission``): the score says how much
-passed, the grade says whether anything needs attention.
+``DQADimension`` survives as a category -- which kind of problem a finding is
+-- because that is useful on a query. Nothing weights it any more.
 """
 
 from __future__ import annotations
@@ -26,13 +26,9 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.enums import (
-    DQA_WEIGHTS,
     DQADimension,
     Severity,
     SubmissionStatus,
-    grade_for_score,
-    grade_for_submission,
-    grade_note,
 )
 from app.core.logging_config import get_logger
 from app.models import (
@@ -47,14 +43,12 @@ from app.models import (
     ValidationRule,
 )
 from app.schemas.validation import (
-    DimensionScore,
     ValidationIssueRead,
     ValidationSummary,
 )
 from app.services import reconciliation, reference
 from app.services.validation.rules import (
     RULE_REGISTRY,
-    SEVERITY_PENALTY,
     Finding,
     RuleContext,
     RuleDefinition,
@@ -62,10 +56,7 @@ from app.services.validation.rules import (
 
 logger = get_logger(__name__)
 
-#: Points deducted per day a submission arrives after the deadline.
-TIMELINESS_DECAY_PER_DAY = 3.0
-#: Flat deduction when data arrives against a closed reporting period.
-CLOSED_PERIOD_PENALTY = 10.0
+#: How many earlier periods a rule may look back over.
 HISTORY_DEPTH = 8
 
 
@@ -373,47 +364,19 @@ def _severity_for(definition: RuleDefinition, override: ValidationRule | None, f
     return definition.severity
 
 
-def _timeliness_score(ctx: RuleContext) -> tuple[float, dict]:
-    uploaded = ctx.submission.uploaded_at
-    if uploaded is None:
-        return 0.0, {"submitted": False, "days_late": None}
-    late = max(0, (uploaded.date() - ctx.period.due_date).days)
-    score = max(0.0, 100.0 - TIMELINESS_DECAY_PER_DAY * late)
-    if not ctx.period.is_open:
-        score = max(0.0, score - CLOSED_PERIOD_PENALTY)
-    return score, {
-        "submitted": True,
-        "days_late": late,
-        "due_date": ctx.period.due_date.isoformat(),
-        "submitted_on": uploaded.date().isoformat(),
-        "on_time": late == 0,
-    }
-
-
-def _completeness_score(ctx: RuleContext) -> tuple[float, dict]:
-    expected = ctx.expected_indicator_ids
-    if not expected:
-        return 100.0, {"expected": 0, "reported": 0, "note": "No reporting obligation configured"}
-    reported = len(expected & ctx.reported_indicator_ids)
-    score = reported / len(expected) * 100.0
-    return score, {
-        "expected": len(expected),
-        "reported": reported,
-        "missing": len(expected) - reported,
-    }
-
-
 def _usable_share(ctx: RuleContext) -> float | None:
-    """Percentage of this state's reported figures counting towards the totals.
+    """Percentage of this state's reported figures that are fit for use.
 
-    A figure held out under query is excluded from every aggregation, so it is
-    absent from the result in a way no per-check score registers.
+    Every reported figure counts towards the national totals regardless --
+    holding the doubtful ones out made this platform's totals disagree with
+    the NPCU's own published report. This says how much of what the state
+    filed a reader can lean on, not how much of it was counted.
     """
     reported = [value for value in ctx.values if value.effective_value is not None]
     if not reported:
         return None
-    counting = sum(1 for value in reported if value.is_valid)
-    return 100.0 * counting / len(reported)
+    fit = sum(1 for value in reported if value.is_valid)
+    return 100.0 * fit / len(reported)
 
 
 def run_validation(db: Session, submission: Submission, *, persist: bool = True) -> ValidationSummary:
@@ -426,10 +389,10 @@ def run_validation(db: Session, submission: Submission, *, persist: bool = True)
 
     issues: list[ValidationIssue] = []
     issue_reads: list[ValidationIssueRead] = []
-    checks: dict[DQADimension, float] = {dimension: 0.0 for dimension in DQADimension}
-    penalties: dict[DQADimension, float] = {dimension: 0.0 for dimension in DQADimension}
+    #: Findings per dimension. A count, not a score: it says how many things
+    #: need looking at in each area, and makes no claim about how good the
+    #: return is overall.
     failed: dict[DQADimension, int] = {dimension: 0 for dimension in DQADimension}
-    rule_penalties: dict[str, float] = {}
     counts = {Severity.ERROR: 0, Severity.WARNING: 0, Severity.INFO: 0}
     blocking = False
 
@@ -437,12 +400,6 @@ def run_validation(db: Session, submission: Submission, *, persist: bool = True)
         override = overrides.get(definition.code)
         if override is not None and not override.is_active:
             continue
-
-        # A rule with nothing to look at contributes nothing. Crediting it with
-        # a check it never ran is the same error as the inflated weights, one
-        # order of magnitude smaller.
-        weight = max(definition.weight_fn(ctx), 0)
-        checks[definition.dimension] += weight
 
         try:
             findings = list(definition.fn(ctx))
@@ -460,10 +417,6 @@ def run_validation(db: Session, submission: Submission, *, persist: bool = True)
             severity = _severity_for(definition, override, finding)
             counts[severity] += 1
             failed[definition.dimension] += 1
-            penalties[definition.dimension] += SEVERITY_PENALTY[severity]
-            rule_penalties[definition.code] = (
-                rule_penalties.get(definition.code, 0.0) + SEVERITY_PENALTY[severity]
-            )
             finding_blocks = is_blocking_rule and severity == Severity.ERROR
             blocking = blocking or finding_blocks
 
@@ -498,56 +451,16 @@ def run_validation(db: Session, submission: Submission, *, persist: bool = True)
                 )
             )
 
-    # --- score each dimension -------------------------------------------
-    dimension_scores: list[DimensionScore] = []
-    weighted_total = 0.0
-    weight_total = 0.0
-
-    for dimension in DQADimension:
-        details: dict = {}
-        if dimension == DQADimension.TIMELINESS:
-            score, details = _timeliness_score(ctx)
-        elif dimension == DQADimension.COMPLETENESS:
-            score, details = _completeness_score(ctx)
-            # The score already reflects the indicators COM-001 found missing;
-            # only the missing-components rule deducts on top of it.
-            component_penalty = min(rule_penalties.get("COM-002", 0.0) * 0.5, 10.0)
-            score = max(0.0, score - component_penalty)
-            details["component_penalty"] = round(component_penalty, 2)
-        elif checks[dimension] <= 0:
-            # Nothing applicable to check. Not a pass, not a failure.
-            score = None
-            details = {"checks": 0, "note": "No applicable checks for this submission"}
-        else:
-            score = max(0.0, 100.0 * (1.0 - penalties[dimension] / checks[dimension]))
-            details = {
-                "checks": int(checks[dimension]),
-                "penalty": round(penalties[dimension], 2),
-            }
-
-        if score is not None:
-            score = round(min(100.0, max(0.0, score)), 2)
-        weight = DQA_WEIGHTS[dimension]
-        if score is not None:
-            weighted_total += score * weight
-            weight_total += weight
-
-        dimension_scores.append(
-            DimensionScore(
-                dimension=str(dimension),
-                score=score,
-                weight=weight,
-                checks_run=int(checks[dimension]),
-                checks_failed=failed[dimension],
-                grade=grade_for_score(score),
-                details=details,
-            )
-        )
-
-    overall = round(weighted_total / weight_total, 2) if weight_total else 0.0
-    assessed = [d.score for d in dimension_scores if d.score is not None]
+    # No score and no grade. The platform judges a return by whether it can
+    # be used, not by what share of automated checks it passed -- that pass
+    # rate sat near 100 for any plausible return, and a state reporting 127
+    # schools where it had reported 5,960 scored 99.13 and read "Excellent".
+    # Scoring a return is work for a data quality assessment with a field
+    # visit behind it; this counts findings and says what they mean.
     usable_share = _usable_share(ctx)
-    grade = grade_for_submission(overall, assessed, usable_share=usable_share)
+    findings_by_dimension = {
+        str(dimension): count for dimension, count in failed.items() if count
+    }
 
     summary = ValidationSummary(
         submission_id=submission.id,
@@ -556,16 +469,13 @@ def run_validation(db: Session, submission: Submission, *, persist: bool = True)
         error_count=counts[Severity.ERROR],
         warning_count=counts[Severity.WARNING],
         info_count=counts[Severity.INFO],
-        overall_score=overall,
-        grade=grade,
         usable_share_pct=None if usable_share is None else round(usable_share, 1),
-        grade_note=grade_note(overall, assessed, usable_share=usable_share),
-        dimensions=dimension_scores,
+        findings_by_dimension=findings_by_dimension,
         issues=issue_reads,
     )
 
     if persist:
-        _persist(db, submission, issues, dimension_scores, summary)
+        _persist(db, submission, issues, summary)
 
     logger.info(
         "validation complete",
@@ -575,7 +485,6 @@ def run_validation(db: Session, submission: Submission, *, persist: bool = True)
             "period": ctx.period.code,
             "errors": summary.error_count,
             "warnings": summary.warning_count,
-            "dqa_score": overall,
             "blocking": blocking,
         },
     )
@@ -586,9 +495,13 @@ def _persist(
     db: Session,
     submission: Submission,
     issues: list[ValidationIssue],
-    dimension_scores: list[DimensionScore],
     summary: ValidationSummary,
 ) -> None:
+    """Replace this submission's findings with the ones just raised.
+
+    Any dimension scores left over from before scoring was removed go with
+    them, so a re-validation clears the last trace of a grade nobody trusted.
+    """
     for stale in db.scalars(
         select(ValidationIssue).where(ValidationIssue.submission_id == submission.id)
     ):
@@ -598,28 +511,8 @@ def _persist(
     ):
         db.delete(stale_score)
     db.flush()
-
     db.add_all(issues)
-    for dimension in dimension_scores:
-        if dimension.score is None:
-            # Nothing applicable was checked, so there is no score to record.
-            # An absent row reads as "not assessed"; a row would have to carry
-            # a number, and any number here would be a claim we cannot make.
-            continue
-        db.add(
-            DQAScore(
-                submission_id=submission.id,
-                dimension=dimension.dimension,
-                score=dimension.score,
-                weight=dimension.weight,
-                checks_run=dimension.checks_run,
-                checks_failed=dimension.checks_failed,
-                details=dimension.details,
-            )
-        )
 
-    submission.dqa_score = summary.overall_score
-    submission.dqa_grade = summary.grade
     submission.error_count = summary.error_count
     submission.warning_count = summary.warning_count
 
@@ -639,13 +532,20 @@ def _persist(
     db.flush()
 
 
+def _count_by_dimension(issues: list[ValidationIssue]) -> dict[str, int]:
+    """How many findings fall in each area -- a count, never a score."""
+    counts: dict[str, int] = {}
+    for issue in issues:
+        if Severity(issue.severity) is Severity.INFO or not issue.dimension:
+            continue
+        counts[issue.dimension] = counts.get(issue.dimension, 0) + 1
+    return counts
+
+
 def summarise_submission(db: Session, submission: Submission) -> ValidationSummary:
-    """Rebuild a summary from stored issues and scores, without re-running rules."""
+    """Rebuild a summary from stored findings, without re-running the rules."""
     issues = list(
         db.scalars(select(ValidationIssue).where(ValidationIssue.submission_id == submission.id))
-    )
-    scores = list(
-        db.scalars(select(DQAScore).where(DQAScore.submission_id == submission.id))
     )
     indicator_codes = {
         indicator.id: indicator.code
@@ -663,20 +563,7 @@ def summarise_submission(db: Session, submission: Submission) -> ValidationSumma
         error_count=sum(1 for i in issues if i.severity == Severity.ERROR),
         warning_count=sum(1 for i in issues if i.severity == Severity.WARNING),
         info_count=sum(1 for i in issues if i.severity == Severity.INFO),
-        overall_score=submission.dqa_score or 0.0,
-        grade=submission.dqa_grade or grade_for_score(submission.dqa_score),
-        dimensions=[
-            DimensionScore(
-                dimension=score.dimension,
-                score=score.score,
-                weight=score.weight,
-                checks_run=score.checks_run,
-                checks_failed=score.checks_failed,
-                grade=grade_for_score(score.score),
-                details=score.details or {},
-            )
-            for score in sorted(scores, key=lambda s: s.dimension)
-        ],
+        findings_by_dimension=_count_by_dimension(issues),
         issues=[
             ValidationIssueRead(
                 id=issue.id,

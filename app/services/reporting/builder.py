@@ -1,4 +1,4 @@
-"""Assembles routine/periodic reports from the analysis and DQA services."""
+"""Assembles routine and periodic reports from the analysis and returns services."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from app.core.errors import ValidationError
 from app.core.logging_config import get_logger
 from app.models import GeneratedReport, Indicator, ReportingPeriod, User
 from app.schemas.reporting import ReportArtifact, ReportRequest, ReportResponse
-from app.services import analytics, audit, dqa, queries, reference
+from app.services import analytics, audit, queries, reference, returns
 from app.services import cohort as cohort_service
 from app.services.reporting.document import ReportDocument, Section, Table
 from app.services.reporting.docx_renderer import render_docx
@@ -131,7 +131,7 @@ def _indicator_narrative(
 # Section builders
 # --------------------------------------------------------------------------
 def _reporting_status_section(db: Session, period: ReportingPeriod) -> Section:
-    summary = dqa.national_summary(db, period)
+    summary = returns.national_returns(db, period)
     section = Section(heading="Reporting status and coverage")
     section.add_paragraph(
         f"{summary.states_reported} of {summary.states_expected} states submitted data for "
@@ -144,7 +144,8 @@ def _reporting_status_section(db: Session, period: ReportingPeriod) -> Section:
         Table(
             caption="Reporting status by financing cohort",
             headers=[
-                "Cohort", "States", "Reported", "Reporting rate", "On-time rate", "Avg DQA", "Grade",
+                "Cohort", "States", "Reported", "Reporting rate", "On-time rate",
+                "Not fit for use", "Figures fit for use",
             ],
             rows=[
                 [
@@ -153,15 +154,15 @@ def _reporting_status_section(db: Session, period: ReportingPeriod) -> Section:
                     str(row.states_reported),
                     _pct(row.reporting_rate_pct),
                     _pct(row.on_time_rate_pct),
-                    _fmt(row.average_score),
-                    row.grade,
+                    str(row.states_not_fit),
+                    _pct(row.usable_share_pct),
                 ]
-                for row in summary.cohort_scores
+                for row in summary.cohort_returns
             ],
         )
     )
     non_reporting = [
-        card.state_name for card in summary.scorecards if card.submission_id is None
+        card.state_name for card in summary.returns if card.submission_id is None
     ]
     if non_reporting:
         section.add_paragraph(
@@ -170,40 +171,49 @@ def _reporting_status_section(db: Session, period: ReportingPeriod) -> Section:
     return section
 
 
-def _dqa_section(db: Session, period: ReportingPeriod, scope: ReportScope, scope_ref: str | None) -> Section:
-    section = Section(heading="Data quality assessment")
-    summary = dqa.national_summary(db, period)
+def _data_quality_section(
+    db: Session, period: ReportingPeriod, scope: ReportScope, scope_ref: str | None
+) -> Section:
+    """What the validation found, and whether each return can be relied on.
+
+    This used to open with a consolidated DQA score out of 100 and a letter
+    grade. Both are gone: the score was a pass rate over automated checks, so
+    it sat near 100 for any plausible return and told a reader nothing about
+    whether the figures underneath could be used. The verdict says that
+    directly, and the findings say why.
+    """
+    section = Section(heading="Data quality")
+    summary = returns.national_returns(db, period)
 
     if scope == ReportScope.STATE and scope_ref:
         state = reference.get_state_by_code(db, scope_ref)
-        card = dqa.state_scorecard(db, state, period)
+        card = returns.state_return(db, state, period)
         section.add_paragraph(
-            f"{state.name} scored {_fmt(card.overall_score)} out of 100 ({card.grade}) across the "
-            f"seven data quality dimensions, with {card.error_count} error(s) and "
-            f"{card.warning_count} warning(s) raised by the validation engine."
+            f"{state.name}'s return for {period.code} is **{card.fitness_verdict}**"
+            + (f". {card.verdict_note}" if card.verdict_note else ".")
+            + f" The validation raised {card.error_count} error(s) and "
+            f"{card.warning_count} warning(s), each one a query with the state."
         )
-        section.add_table(
-            Table(
-                caption=f"{state.name} DQA scorecard - {period.code}",
-                headers=["Dimension", "Score", "Grade", "Checks run", "Checks failed", "Weight"],
-                rows=[
-                    [
-                        dimension.dimension.title(),
-                        _fmt(dimension.score),
-                        dimension.grade or "",
-                        str(dimension.checks_run),
-                        str(dimension.checks_failed),
-                        _fmt(dimension.weight, 1),
-                    ]
-                    for dimension in card.dimensions
-                ],
+        if card.findings_by_dimension:
+            section.add_table(
+                Table(
+                    caption=f"{state.name} findings by area - {period.code}",
+                    headers=["Area", "Findings"],
+                    rows=[
+                        [area.title(), str(count)]
+                        for area, count in sorted(
+                            card.findings_by_dimension.items(),
+                            key=lambda item: -item[1],
+                        )
+                    ],
+                    align=["left", "right"],
+                )
             )
-        )
         if card.top_issues:
             section.add_table(
                 Table(
                     caption="Validation findings requiring attention",
-                    headers=["Severity", "Dimension", "Rule", "Finding"],
+                    headers=["Severity", "Area", "Rule", "Finding"],
                     rows=[
                         [issue.severity, issue.dimension.title(), issue.rule_code, issue.message]
                         for issue in card.top_issues
@@ -213,44 +223,45 @@ def _dqa_section(db: Session, period: ReportingPeriod, scope: ReportScope, scope
             )
         return section
 
-    scorecards = summary.scorecards
+    rows = summary.returns
     if scope == ReportScope.COHORT and scope_ref:
-        scorecards = [card for card in scorecards if card.cohort_code == scope_ref.upper()]
+        rows = [card for card in rows if card.cohort_code == scope_ref.upper()]
 
     section.add_paragraph(
-        f"The consolidated DQA score for {period.code} is {_fmt(summary.national_score)} out of "
-        f"100 ({summary.grade}), averaged across the {summary.states_reported} states that "
-        "submitted data. The score is the proportion of applicable checks that passed; the "
-        "grade additionally accounts for figures held out of the totals, which no per-check "
-        "score can see."
+        f"Of the {summary.states_reported} states that submitted for {period.code}, "
+        f"{summary.states_fit} are fit for use without qualification, "
+        f"{summary.states_fit_with_notes} are fit with notes, and "
+        f"**{summary.states_not_fit} are not fit for use**. A return is judged not "
+        "fit when it carries a finding whose error is large enough to move a "
+        "national figure, or when a material share of its contribution rests on "
+        "figures the validation could not vouch for."
     )
     if summary.figures_reported:
         section.add_paragraph(
             f"{summary.figures_counting} of {summary.figures_reported} reported figures "
-            f"({_pct(summary.usable_share_pct)}) count towards the consolidated results."
-            + (f" {summary.grade_note}" if summary.grade_note else "")
+            f"({_pct(summary.usable_share_pct)}) carry no open finding. Every figure "
+            "counts towards the consolidated results regardless; this says how much "
+            "of what the states filed can be relied on without qualification."
+        )
+    if summary.findings_by_dimension:
+        section.add_table(
+            Table(
+                caption="Findings by area",
+                headers=["Area", "Findings"],
+                rows=[
+                    [area.title(), str(count)]
+                    for area, count in sorted(
+                        summary.findings_by_dimension.items(), key=lambda item: -item[1]
+                    )
+                ],
+                align=["left", "right"],
+            )
         )
     section.add_table(
         Table(
-            caption="National average by data quality dimension",
-            headers=["Dimension", "Score", "Grade", "States assessed", "Weight"],
-            rows=[
-                [
-                    dimension.dimension.title(),
-                    "not assessed" if dimension.score is None else _fmt(dimension.score),
-                    "" if dimension.score is None else (dimension.grade or ""),
-                    str(dimension.details.get("states_assessed", "—")),
-                    _fmt(dimension.weight, 1),
-                ]
-                for dimension in summary.dimension_averages
-            ],
-        )
-    )
-    section.add_table(
-        Table(
-            caption="State DQA scorecards",
+            caption="Fitness of each state's return",
             headers=[
-                "State", "Cohort", "Status", "Score", "Grade", "Figures counting",
+                "State", "Cohort", "Status", "Verdict", "Figures fit for use",
                 "Errors", "Warnings", "Days late",
             ],
             rows=[
@@ -258,8 +269,7 @@ def _dqa_section(db: Session, period: ReportingPeriod, scope: ReportScope, scope
                     card.state_name,
                     card.cohort_code or "—",
                     card.status or "—",
-                    _fmt(card.overall_score),
-                    card.grade,
+                    card.fitness_verdict or "—",
                     (
                         f"{card.figures_counting} of {card.figures_reported} "
                         f"({_pct(card.usable_share_pct)})"
@@ -270,12 +280,13 @@ def _dqa_section(db: Session, period: ReportingPeriod, scope: ReportScope, scope
                     str(card.warning_count),
                     "—" if card.days_late is None else str(card.days_late),
                 ]
-                for card in scorecards
+                for card in rows
             ],
-            align=["left", "left", "left", "right", "left", "right", "right", "right", "right"],
+            align=["left", "left", "left", "left", "right", "right", "right", "right"],
             note=(
-                "A grade below the score's own band is capped by figures held out of the "
-                "totals or by a weak dimension; the reason is given per state on the platform."
+                "No figure is excluded from the consolidated totals on account of its "
+                "verdict. A flagged figure is counted and disclosed, so a reader can "
+                "see both what it contributes and what it distorts."
             ),
         )
     )
@@ -283,7 +294,7 @@ def _dqa_section(db: Session, period: ReportingPeriod, scope: ReportScope, scope
         section.add_table(
             Table(
                 caption="Most frequent validation findings",
-                headers=["Rule", "Dimension", "States affected", "Share of states"],
+                headers=["Rule", "Area", "States affected", "Share of states"],
                 rows=[
                     [
                         issue["rule_code"],
@@ -596,7 +607,7 @@ def _state_contribution_section(
         board = analytics.scorecard(
             db, period, scope="STATE", state_code=state.code, indicators=indicators
         )
-        card = dqa.state_scorecard(db, state, period)
+        card = returns.state_return(db, state, period)
         rankings.append(
             {
                 "state": state.name,
@@ -604,7 +615,7 @@ def _state_contribution_section(
                 "average": board.average_achievement_pct,
                 "on_track": board.indicators_on_track,
                 "with_data": board.indicators_with_data,
-                "dqa": card.overall_score,
+                "verdict": card.fitness_verdict or "—",
             }
         )
     rankings.sort(key=lambda row: (row["average"] is None, -(row["average"] or 0), row["state"]))
@@ -612,7 +623,10 @@ def _state_contribution_section(
     section.add_table(
         Table(
             caption="State performance ranking",
-            headers=["Rank", "State", "Cohort", "Avg achievement", "KPIs on track", "KPIs reported", "DQA"],
+            headers=[
+                "Rank", "State", "Cohort", "Avg achievement", "KPIs on track",
+                "KPIs reported", "Fitness",
+            ],
             rows=[
                 [
                     str(rank),
@@ -621,7 +635,7 @@ def _state_contribution_section(
                     _pct(row["average"]),
                     str(row["on_track"]),
                     str(row["with_data"]),
-                    _fmt(row["dqa"]),
+                    row["verdict"],
                 ]
                 for rank, row in enumerate(rankings, start=1)
             ],
@@ -669,8 +683,8 @@ def _cohort_section(db: Session, period: ReportingPeriod, indicators: list[Indic
         Table(
             caption="Cohort comparison",
             headers=[
-                "Cohort", "States", "Reporting", "On-time", "Completeness", "Avg DQA",
-                "Avg achievement", "On track", "Contribution",
+                "Cohort", "States", "Reporting", "On-time", "Completeness",
+                "Not fit for use", "Avg achievement", "On track", "Contribution",
             ],
             rows=[
                 [
@@ -679,7 +693,7 @@ def _cohort_section(db: Session, period: ReportingPeriod, indicators: list[Indic
                     _pct(row.reporting_rate_pct),
                     _pct(row.on_time_rate_pct),
                     _pct(row.completeness_pct),
-                    _fmt(row.average_dqa_score),
+                    str(row.states_not_fit),
                     _pct(row.average_achievement_pct),
                     f"{row.indicators_on_track}/{row.indicators_assessed}",
                     _pct(row.contribution_pct),
@@ -852,12 +866,13 @@ def build_report(
         cohort_code=scope_ref if scope == ReportScope.COHORT else None,
         indicators=indicators,
     )
-    national_dqa = dqa.national_summary(db, period)
+    national = returns.national_returns(db, period)
     document.summary = (
-        f"For {period.label}, {national_dqa.states_reported} of {national_dqa.states_expected} "
-        f"AGILE states submitted reporting data and {national_dqa.states_approved} submissions "
-        f"cleared the data quality gate. The consolidated DQA score is "
-        f"{_fmt(national_dqa.national_score)}/100 ({national_dqa.grade}). Across the "
+        f"For {period.label}, {national.states_reported} of {national.states_expected} "
+        f"AGILE states submitted reporting data and {national.states_approved} submissions "
+        f"were approved. Of those that reported, {national.states_not_fit} "
+        f"carry findings large enough that the return is not fit for use without "
+        f"reconciliation with the SPIU. Across the "
         f"{len(indicators)} indicators in scope ({_indicator_count(indicators)}), average "
         f"achievement against target is "
         f"{_pct(board.average_achievement_pct)}, with {board.indicators_on_track} of "
@@ -898,8 +913,8 @@ def build_report(
         )
 
     document.add_section(_reporting_status_section(db, period))
-    if request.include_dqa:
-        document.add_section(_dqa_section(db, period, scope, scope_ref))
+    if request.include_data_quality:
+        document.add_section(_data_quality_section(db, period, scope, scope_ref))
     # Before the numbers, not after: what is unconfirmed qualifies every figure
     # that follows, and a reader who meets it in an appendix has already drawn
     # conclusions from totals they did not know were provisional.

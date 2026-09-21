@@ -72,14 +72,21 @@ class Submission(Base, TimestampMixin):
     open_query_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     quarantined_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
-    dqa_score: Mapped[float | None] = mapped_column(Float, index=True)
-    dqa_grade: Mapped[str | None] = mapped_column(String(24))
-    #: The headline a reader acts on. The DQA score measures how many checks
-    #: passed; this says whether the return can be used.
+    #: The headline a reader acts on: FIT, FIT WITH NOTES, NOT FIT FOR USE,
+    #: NO DATA. There was a 0-100 DQA score and a letter grade here; both were
+    #: removed. The score was a pass rate over thousands of automated checks,
+    #: so it sat near 100 for any plausible return, and a state reporting 127
+    #: schools against the 5,960 it reported the quarter before scored 99.13
+    #: and read "Excellent". The columns are gone; the verdict is the headline.
     fitness_verdict: Mapped[str | None] = mapped_column(String(24), index=True)
     #: Share of this state's reported volume, weighted by each figure's place
     #: in the national total, that sits behind an unfit or queried figure.
     exposed_share: Mapped[float | None] = mapped_column(Float)
+    #: Findings whose error is large enough to move a national figure. This is
+    #: what decides the verdict -- one blocking finding whose error is a
+    #: rounding artefact leaves a return usable; one that moves the national
+    #: result does not.
+    material_findings: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     warning_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     #: Free-form parsing/mapping diagnostics kept for the audit trail.

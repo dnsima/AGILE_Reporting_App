@@ -13,11 +13,11 @@ from statistics import fmean
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.enums import ADDITIVE_METHODS, FitnessVerdict, SubmissionStatus, grade_for_score
+from app.core.enums import ADDITIVE_METHODS, FitnessVerdict, SubmissionStatus
 from app.core.events import event_bus
 from app.models import ReportingPeriod, Submission
 from app.schemas.analytics import DashboardKpiTile, DashboardOverview
-from app.services import analytics, cohort, dqa, exposure, reference
+from app.services import analytics, cohort, exposure, reference, returns
 
 #: What a unit looks like on a tile. The raw enum was going straight to the
 #: page, so a completion rate rendered as "64.0882PERCENT".
@@ -200,7 +200,7 @@ def overview(
     else:
         board = analytics.scorecard(db, period, scope="NATIONAL", indicators=indicators)
 
-    national_dqa = dqa.national_summary(
+    national = returns.national_returns(
         db, period, state_code=state_code, cohort_code=cohort_code
     )
     cohort_rows = [] if state else cohort.cohort_summaries(db, period, indicators=indicators)
@@ -248,18 +248,20 @@ def overview(
         ),
         fitness,
         DashboardKpiTile(
-            key="dqa_score",
-            label=f"{scope_word} DQA score" if not state else "DQA score",
-            # national_dqa is already scoped to the selection, so this needs
-            # no branch of its own -- and cannot drift from the rest of the
-            # board the way a separately resolved figure would.
-            value=national_dqa.national_score,
-            unit="/100",
+            key="returns_not_fit",
+            label=f"{scope_word} returns not fit for use" if not state else "Fitness",
+            # There was a DQA score here: a 0-100 pass rate over automated
+            # checks, which sat near 100 for any plausible return and read
+            # "Excellent" beside a state that had lost 5,833 schools. This
+            # counts the returns a reader cannot rely on, which is the thing
+            # the score was being read as saying.
+            value=float(national.states_not_fit),
+            unit=" states",
             caption=(
-                "How many checks passed. It is not a verdict on whether the "
-                "data can be used -- see above."
+                f"{national.states_fit} fit, {national.states_fit_with_notes} fit "
+                f"with notes, {national.states_not_fit} not fit for use"
             ),
-            status=national_dqa.grade,
+            status="Lagging" if national.states_not_fit else "On track",
         ),
         (
             _contribution_tile(db, period, states, indicators, board)
@@ -349,17 +351,19 @@ def overview(
             "states_expected": len(states),
             "states_submitted": submitted,
             "states_approved": approved,
-            "on_time_rate_pct": national_dqa.on_time_rate_pct,
+            "on_time_rate_pct": national.on_time_rate_pct,
             "due_date": period.due_date.isoformat(),
             "top_states": top_states,
         },
         dqa_summary={
-            "national_score": national_dqa.national_score,
-            "grade": national_dqa.grade,
-            "dimensions": [d.model_dump() for d in national_dqa.dimension_averages],
-            "common_issues": national_dqa.common_issues,
-            "states_reported": national_dqa.states_reported,
-            "states_approved": national_dqa.states_approved,
+            "states_not_fit": national.states_not_fit,
+            "states_fit_with_notes": national.states_fit_with_notes,
+            "states_fit": national.states_fit,
+            "usable_share_pct": national.usable_share_pct,
+            "findings_by_dimension": national.findings_by_dimension,
+            "common_issues": national.common_issues,
+            "states_reported": national.states_reported,
+            "states_approved": national.states_approved,
         },
     )
 
@@ -373,7 +377,7 @@ def _state_rankings(
         board = analytics.scorecard(
             db, period, scope="STATE", state_code=state.code, indicators=indicators
         )
-        card = dqa.state_scorecard(db, state, period)
+        card = returns.state_return(db, state, period)
         rows.append(
             {
                 "state_code": state.code,
@@ -382,8 +386,8 @@ def _state_rankings(
                 "average_achievement_pct": board.average_achievement_pct,
                 "indicators_on_track": board.indicators_on_track,
                 "indicators_with_data": board.indicators_with_data,
-                "dqa_score": card.overall_score,
-                "dqa_grade": card.grade,
+                "fitness_verdict": card.fitness_verdict,
+                "open_findings": card.error_count + card.warning_count,
                 "reported": card.submission_id is not None,
                 "days_late": card.days_late,
             }
@@ -407,13 +411,20 @@ def state_rankings(
     return rows
 
 
-def dqa_heatmap(
+def findings_heatmap(
     db: Session,
     period_codes: list[str] | None = None,
     limit: int = 8,
     period_type: str | None = None,
 ) -> dict:
-    """States x periods DQA score heatmap for the dashboard."""
+    """States x periods, coloured by how many findings each return carries.
+
+    This plotted a 0-100 DQA score, which clustered so tightly near the top
+    that the heatmap needed its own stretched colour scale to show any
+    variation at all -- a sign the number was not measuring what the picture
+    was meant to show. A count of open findings has a real zero, moves in the
+    direction a reader expects, and each cell says which verdict it earned.
+    """
     periods = (
         [reference.get_period_by_code(db, code) for code in period_codes]
         if period_codes
@@ -423,29 +434,31 @@ def dqa_heatmap(
     cells = []
     for state in states:
         for period in periods:
-            card = dqa.state_scorecard(db, state, period)
+            row = returns.state_return(db, state, period)
             cells.append(
                 {
                     "row_key": state.code,
                     "column_key": period.code,
-                    "value": card.overall_score,
-                    "label": card.grade,
+                    "value": (
+                        None
+                        if row.submission_id is None
+                        else row.error_count + row.warning_count
+                    ),
+                    "label": row.fitness_verdict or "NO DATA",
                 }
             )
-    scores = [cell["value"] for cell in cells if cell["value"] is not None]
-    # DQA scores cluster near the top, so the colour scale spans the observed
-    # range rather than a flat 0-100 where every cell would look identical. The
-    # legend carries both ends so the scale stays self-describing.
-    lowest = min(scores) if scores else 0.0
+    counts = [cell["value"] for cell in cells if cell["value"] is not None]
     return {
-        "metric": "dqa_score",
+        "metric": "open_findings",
         "rows": [state.code for state in states],
         "row_labels": {state.code: state.name for state in states},
         "columns": [period.code for period in periods],
         "column_labels": {period.code: period.label for period in periods},
         "cells": cells,
-        "scale_min": round(max(0.0, lowest - 2), 1),
-        "scale_max": 100.0,
-        "average": round(fmean(scores), 2) if scores else None,
-        "grade": grade_for_score(round(fmean(scores), 2) if scores else None),
+        "scale_min": 0.0,
+        "scale_max": float(max(counts)) if counts else 1.0,
+        "average": round(fmean(counts), 1) if counts else None,
+        "states_not_fit": sum(
+            1 for cell in cells if cell["label"] == str(FitnessVerdict.NOT_FIT)
+        ),
     }

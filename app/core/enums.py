@@ -342,11 +342,14 @@ EXPOSED_STATUSES = {DisclosureStatus.UNFIT, DisclosureStatus.QUERIED}
 
 
 class FitnessVerdict(StrEnum):
-    """The headline a reader should act on, in place of the DQA grade.
+    """The headline a reader should act on.
 
-    The DQA score answers "what share of checks passed?", which for any
-    plausible return is about 98. Readers take the headline as an answer to
-    "can I use this?", so that is what the headline now says.
+    This is the platform's only judgement about a return. It replaced a 0-100
+    DQA score and a letter grade, which answered "what share of checks
+    passed?" -- about 98 for any plausible return -- while readers took the
+    headline as an answer to "can I use this?". Scoring a return is a job for
+    a proper DQA process with a field visit behind it, not for a pass rate
+    over automated checks.
     """
 
     FIT = "FIT"
@@ -355,61 +358,29 @@ class FitnessVerdict(StrEnum):
     NO_DATA = "NO DATA"
 
 
-#: Grade bands, strongest first.
-GRADE_BANDS = ("Excellent", "Good", "Fair", "Weak", "Poor")
-
-
-def grade_for_score(score: float | None) -> str:
-    """Map a 0-100 score onto the platform's performance grade bands."""
-    if score is None:
-        return "No data"
-    if score >= 90:
-        return "Excellent"
-    if score >= 80:
-        return "Good"
-    if score >= 70:
-        return "Fair"
-    if score >= 60:
-        return "Weak"
-    return "Poor"
-
-
-#: A dimension at or below this score costs the submission one grade band.
-WEAK_DIMENSION_THRESHOLD = 80.0
-#: At or below this, it costs two.
-CRITICAL_DIMENSION_THRESHOLD = 60.0
-
-#: Below this share of a state's figures counting towards the national totals,
-#: the grade drops one band; below the second, two.
-USABLE_FIGURES_THRESHOLD = 90.0
-CRITICAL_USABLE_FIGURES_THRESHOLD = 75.0
-
-#: Share of a state's weight in the national totals that may sit behind
-#: doubted figures before the return itself is called unfit to use.
 NOT_FIT_EXPOSED_SHARE = 10.0
 
 
 def verdict_for_submission(
     *,
-    score: float | None,
+    has_data: bool,
     exposed_share: float | None,
     material_findings: int,
     open_findings: int,
 ) -> FitnessVerdict:
     """Say whether a return can be used, which is what a reader actually asks.
 
-    The DQA score is a pass rate over every check attempted, so it sits near
-    100 for any plausible return: Gombe scored 99.13 in Q2 2026 while reporting
-    127 schools where it had reported 5,960 the quarter before, an error large
-    enough to move the national figure by 89%. A reader who saw "Excellent"
-    would have had no way to know. The verdict answers the question the grade
-    was being read as answering.
+    This replaced a 0-100 score and a letter grade. The score was a pass rate
+    over every check attempted, so it sat near 100 for any plausible return:
+    Gombe scored 99.13 in Q2 2026 while reporting 127 schools where it had
+    reported 5,960 the quarter before, an error large enough to move the
+    national figure by 89%. A reader who saw "Excellent" had no way to know.
 
     Materiality decides, not the count of findings. One blocking finding whose
     error is a rounding artefact leaves a return usable; one whose error moves
     the national result does not.
     """
-    if score is None:
+    if not has_data:
         return FitnessVerdict.NO_DATA
     if material_findings > 0:
         return FitnessVerdict.NOT_FIT
@@ -452,81 +423,3 @@ def verdict_note(
     )
 
 
-def grade_for_submission(
-    score: float | None,
-    dimension_scores: list[float],
-    *,
-    usable_share: float | None = None,
-) -> str:
-    """Grade a submission, capping the headline by what it hides.
-
-    The overall score is a per-check pass rate over thousands of checks, so it
-    is pinned near 100 for any plausible return: Kebbi's Q2 scored 97.8 with
-    sixteen of its fifty-three figures held out of the national totals. The
-    score answers "what proportion of checks passed?"; a reader takes the grade
-    as an answer to "how much of this can I rely on?". Two caps keep the grade
-    answering the second question.
-
-    ``dimension_scores`` catches a single badly failing dimension that the
-    weighted mean would otherwise absorb. ``usable_share`` -- the percentage of
-    this state's reported figures currently counting towards the national
-    totals -- catches the case the dimensions cannot see, because a figure held
-    out under query is one finding against thousands of checks but a whole
-    figure missing from the result.
-
-    The two caps are taken at their maximum rather than added: the held figures
-    usually *are* the findings driving a weak dimension, and charging twice for
-    one problem would be its own kind of dishonesty.
-    """
-    if score is None:
-        return "No data"
-    base = grade_for_score(score)
-
-    demotion = 0
-    if dimension_scores:
-        weakest = min(dimension_scores)
-        if weakest < CRITICAL_DIMENSION_THRESHOLD:
-            demotion = 2
-        elif weakest < WEAK_DIMENSION_THRESHOLD:
-            demotion = 1
-
-    if usable_share is not None:
-        if usable_share < CRITICAL_USABLE_FIGURES_THRESHOLD:
-            demotion = max(demotion, 2)
-        elif usable_share < USABLE_FIGURES_THRESHOLD:
-            demotion = max(demotion, 1)
-
-    index = min(GRADE_BANDS.index(base) + demotion, len(GRADE_BANDS) - 1)
-    return GRADE_BANDS[index]
-
-
-def grade_note(
-    score: float | None,
-    dimension_scores: list[float],
-    *,
-    usable_share: float | None = None,
-) -> str | None:
-    """Say why the grade sits below the score's own band, if it does.
-
-    A grade nobody can account for is worse than no grade, so wherever the cap
-    bites it is shown with its reason.
-    """
-    if score is None:
-        return None
-    base = grade_for_score(score)
-    final = grade_for_submission(score, dimension_scores, usable_share=usable_share)
-    if final == base:
-        return None
-
-    reasons = []
-    if usable_share is not None and usable_share < USABLE_FIGURES_THRESHOLD:
-        reasons.append(
-            f"only {usable_share:.0f}% of its figures count towards the national totals"
-        )
-    if dimension_scores and min(dimension_scores) < WEAK_DIMENSION_THRESHOLD:
-        reasons.append(f"its weakest dimension scores {min(dimension_scores):.0f}")
-    return (
-        f"Scored {score:.1f} ({base}), graded {final} because "
-        + " and ".join(reasons)
-        + "."
-    )

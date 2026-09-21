@@ -1,4 +1,10 @@
-"""Data quality endpoints: scorecards, national summary and rule administration."""
+"""How the period's returns stand, and the rules that decide it.
+
+There is no scorecard endpoint any more. It served a 0-100 DQA score and a
+letter grade; both were removed as answering the wrong question. What is
+served here is the fitness verdict, the findings behind it and the rule
+catalogue those findings come from.
+"""
 
 from __future__ import annotations
 
@@ -16,12 +22,12 @@ from app.core.enums import Permission
 from app.core.errors import NotFoundError
 from app.models import ValidationRule
 from app.schemas.validation import (
-    DQAScorecard,
-    NationalDQASummary,
+    NationalReturns,
+    StateReturn,
     ValidationRuleRead,
     ValidationRuleUpdate,
 )
-from app.services import audit, dqa, reference
+from app.services import audit, reference, returns
 
 router = APIRouter(prefix="/quality", tags=["Data quality"])
 
@@ -36,26 +42,26 @@ def _resolve_period(db, period_code: str | None):
 
 
 @router.get(
-    "/scorecards/{state_code}",
-    response_model=DQAScorecard,
-    summary="State-level DQA scorecard",
+    "/returns/{state_code}",
+    response_model=StateReturn,
+    summary="How one state's return for a period stands",
     dependencies=[Depends(require(Permission.DATA_READ))],
 )
-def state_scorecard(
+def state_return(
     state_code: str,
     db: DbSession,
     principal: CurrentPrincipal,
     period: str | None = None,
-) -> DQAScorecard:
+) -> StateReturn:
     enforce_state_scope(db, principal, state_code)
     state = reference.get_state_by_code(db, state_code)
-    return dqa.state_scorecard(db, state, _resolve_period(db, period))
+    return returns.state_return(db, state, _resolve_period(db, period))
 
 
 @router.get(
     "/national",
-    response_model=NationalDQASummary,
-    summary="Consolidated national DQA summary",
+    response_model=NationalReturns,
+    summary="How the period's returns stand nationally",
     dependencies=[Depends(require(Permission.DATA_READ))],
 )
 def national(
@@ -64,13 +70,13 @@ def national(
     period: str | None = None,
     state: str | None = None,
     cohort: str | None = None,
-) -> NationalDQASummary:
+) -> NationalReturns:
     if state:
         enforce_state_scope(db, principal, state)
     elif principal.is_state_scoped:
         own = visible_state_codes(db, principal)
         state = own[0] if own else None
-    return dqa.national_summary(
+    return returns.national_returns(
         db, _resolve_period(db, period), state_code=state, cohort_code=cohort
     )
 
@@ -84,7 +90,7 @@ def national(
 def list_rules(
     db: DbSession,
     principal: CurrentPrincipal,
-    dimension: str | None = Query(default=None, description="Filter by DQA dimension"),
+    dimension: str | None = Query(default=None, description="Filter by finding area"),
 ) -> list[ValidationRuleRead]:
     stmt = select(ValidationRule).order_by(ValidationRule.code)
     if dimension:
