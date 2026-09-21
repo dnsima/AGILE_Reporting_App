@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.core.enums import Severity
 from app.models import (
+    Cohort,
     Indicator,
     IndicatorCategory,
     ReportingPeriod,
@@ -86,6 +87,17 @@ class IndicatorRow:
     states: list[float | None] = field(default_factory=list)
     #: Codes of the states carrying an open finding against this indicator.
     flagged_states: list[str] = field(default_factory=list)
+    #: State name -> flag severity, so a table can shade the offending cell
+    #: rather than the whole row. C critical, H high, M medium.
+    flag_severity: dict[str, str] = field(default_factory=dict)
+    #: A flag against the national figure itself rather than any one state --
+    #: most often that too few states reported for the total to mean much.
+    national_flag: str | None = None
+    #: What a reader hovering the row should be told.
+    flag_note: str = ""
+    #: How many states reported a figure, out of how many were expected.
+    reporting: int = 0
+    expected: int = 0
 
     @property
     def decimals(self) -> int:
@@ -95,8 +107,42 @@ class IndicatorRow:
     def is_rate(self) -> bool:
         return self.unit in ("PERCENT", "RATIO", "SCORE")
 
+    @property
+    def is_boolean(self) -> bool:
+        return self.unit == "BOOLEAN"
+
+    @property
+    def coverage_pct(self) -> float | None:
+        return None if not self.expected else round(self.reporting / self.expected * 100, 1)
+
     def state_value(self, index: int) -> float | None:
         return self.states[index] if 0 <= index < len(self.states) else None
+
+    def display(self, value: float | None) -> str:
+        """One figure as the workbook prints it.
+
+        A boolean reads Yes or No, never 1 or 0; a rate keeps one decimal; a
+        count is grouped. An unreported figure is a dash, never a zero -- the
+        two mean different things and the dash is the one that starts a
+        conversation with the state.
+        """
+        if value is None:
+            return "\u2014"
+        if self.is_boolean:
+            return "Yes" if value >= 1 else "No"
+        if self.is_rate:
+            return f"{value:,.1f}"
+        return f"{value:,.0f}"
+
+    @property
+    def national_display(self) -> str:
+        if self.achieved is None:
+            return "\u2014"
+        if self.is_boolean:
+            return f"{self.achieved:,.0f} / {self.expected}"
+        if self.is_rate:
+            return f"{self.achieved:,.1f}%"
+        return f"{self.achieved:,.0f}"
 
 
 @dataclass
@@ -106,8 +152,14 @@ class Flag:
     severity: str
     code: str
     indicator: str
+    #: State names, not codes -- the same labels the tables are headed with.
     states: list[str]
+    #: What the finding says. When several states carry it and their wording
+    #: differs, this is the part they share, and ``details`` holds the rest.
     issue: str
+    #: One line per state, where the states' findings differ. Empty when they
+    #: all say the same thing.
+    details: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def states_label(self) -> str:
@@ -125,6 +177,12 @@ class AnalysisModel:
     indicators: list[IndicatorRow]
     flags: list[Flag]
     states_reporting: int
+    #: Cohort code -> the names of its states, in the order of ``states``.
+    #: The cohort is a dimension the charts cut by, not a filter over the
+    #: whole board: a cohort filter is what made a reporting rate read
+    #: "18 of 11 states".
+    cohorts: dict[str, list[str]] = field(default_factory=dict)
+    cohort_names: dict[str, str] = field(default_factory=dict)
 
     def by_component(self, component: str) -> list[IndicatorRow]:
         return [row for row in self.indicators if row.component == component]
@@ -136,6 +194,69 @@ class AnalysisModel:
     def components(self) -> list[str]:
         present = {row.component for row in self.indicators}
         return [c for c in COMPONENT_ORDER if c in present]
+
+
+#: Words a sentence leads into rather than ends on.
+_DANGLING = {
+    "a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "into", "is",
+    "of", "on", "or", "than", "that", "the", "to", "was", "were", "with",
+}
+
+
+def _shared_wording(messages: list[str]) -> str:
+    """The headline for a finding several states carry.
+
+    When they all say the same thing, that is the headline. When they do not
+    -- because each message quotes its own state's figures -- the headline is
+    only the part they agree on, cut at a word boundary, and each state's own
+    wording is kept alongside. Printing one state's numbers above a list of
+    four states' names is how a register stops being trustworthy.
+    """
+    if not messages:
+        return ""
+    first = messages[0]
+    if all(message == first for message in messages):
+        return first
+
+    prefix = first
+    for message in messages[1:]:
+        limit = min(len(prefix), len(message))
+        cut = 0
+        while cut < limit and prefix[cut] == message[cut]:
+            cut += 1
+        prefix = prefix[:cut]
+
+    # The prefix ends wherever the states' figures start diverging, which is
+    # mid-word and usually mid-phrase: "...is cumulative but fell from". Drop
+    # the partial word, then any dangling connective it was leading into, so
+    # the headline ends on something that reads as a finished thought.
+    words = prefix.split(" ")[:-1]
+    while words and words[-1].lower().strip(",;:") in _DANGLING:
+        words.pop()
+    prefix = " ".join(words).strip(" ,;:-\u2014")
+
+    count = len(messages)
+    if len(prefix) < 20:
+        return f"{count} states carry this finding, each with its own figures."
+    return f"{prefix} \u2014 in {count} states, each with its own figures."
+
+
+def _severity_of(issue: ValidationIssue) -> str:
+    """The finding's weight, in the three bands the NPCU's own flags use.
+
+    Critical is a figure that cannot be true -- a cumulative total that fell,
+    parts that do not sum to their whole. High is a movement large enough to
+    change a national reading. Medium is a gap in coverage or an unexplained
+    change. The bands matter because a table that shades everything the same
+    colour tells a reader nothing about where to look first.
+    """
+    if issue.is_blocking:
+        return "C"
+    return "H" if Severity(issue.severity) is Severity.ERROR else "M"
+
+
+#: Worst first, so a cell carrying two findings shows the one that matters.
+_SEVERITY_RANK = {"C": 0, "H": 1, "M": 2}
 
 
 def _flags(db: Session, period: ReportingPeriod, submissions: dict[int, str]) -> list[Flag]:
@@ -172,19 +293,27 @@ def _flags(db: Session, period: ReportingPeriod, submissions: dict[int, str]) ->
                     if issue.indicator_id in indicators
                     else issue.rule_code
                 ),
-                "states": set(),
-                "issue": issue.message,
+                "messages": {},
             },
         )
-        entry["states"].add(submissions[issue.submission_id])
+        # Keyed by state, because the same rule against the same indicator
+        # says something different in each one -- it quotes that state's own
+        # figures. Collapsing them onto the first message it happened to read
+        # would print Borno's numbers under Kaduna's name.
+        entry["messages"].setdefault(submissions[issue.submission_id], issue.message)
 
     rows = [
         Flag(
             severity=entry["severity"],
             code=entry["code"],
             indicator=entry["indicator"],
-            states=sorted(entry["states"]),
-            issue=entry["issue"],
+            states=sorted(entry["messages"]),
+            issue=_shared_wording(list(entry["messages"].values())),
+            details=(
+                sorted(entry["messages"].items())
+                if len(set(entry["messages"].values())) > 1
+                else []
+            ),
         )
         for entry in grouped.values()
     ]
@@ -198,6 +327,17 @@ def build(db: Session, period_code: str) -> AnalysisModel:
     states = reference.active_states(db)
     state_index = {state.code: position for position, state in enumerate(states)}
 
+    # Cohort membership, as a dimension the charts cut by rather than a filter
+    # over everything. Held by state name so a chart can pick its group
+    # straight out of the one ``states`` array every panel shares.
+    cohorts: dict[str, list[str]] = {}
+    cohort_names: dict[str, str] = {}
+    for cohort in db.scalars(select(Cohort).order_by(Cohort.id)):
+        members = [state.name for state in states if state.cohort_id == cohort.id]
+        if members:
+            cohorts[cohort.code] = members
+            cohort_names[cohort.code] = cohort.name
+
     submissions = {
         row.id: db.get(State, row.state_id).code
         for row in db.scalars(
@@ -207,8 +347,11 @@ def build(db: Session, period_code: str) -> AnalysisModel:
         )
     }
 
-    # Which indicators carry an open finding, and where.
-    flagged: dict[str, set[str]] = {}
+    # Which indicators carry an open finding, where, and how badly. Keyed by
+    # state *name*, because that is what a table column is headed with.
+    state_name = {state.code: state.name for state in states}
+    flagged: dict[str, dict[str, str]] = {}
+    notes: dict[str, list[str]] = {}
     if submissions:
         indicators_by_id = {i.id: i for i in db.scalars(select(Indicator))}
         for issue in db.scalars(
@@ -217,11 +360,19 @@ def build(db: Session, period_code: str) -> AnalysisModel:
             )
         ):
             indicator = indicators_by_id.get(issue.indicator_id)
-            if indicator is None:
+            if indicator is None or Severity(issue.severity) is Severity.INFO:
                 continue
-            flagged.setdefault(indicator.code, set()).add(
-                submissions[issue.submission_id]
-            )
+            code = submissions[issue.submission_id]
+            name = state_name.get(code, code)
+            severity = _severity_of(issue)
+            cell = flagged.setdefault(indicator.code, {})
+            if _SEVERITY_RANK[severity] < _SEVERITY_RANK.get(cell.get(name, "M"), 3):
+                cell[name] = severity
+            elif name not in cell:
+                cell[name] = severity
+            bucket = notes.setdefault(indicator.code, [])
+            if issue.message not in bucket:
+                bucket.append(issue.message)
 
     catalogue = list(
         db.scalars(
@@ -247,6 +398,26 @@ def build(db: Session, period_code: str) -> AnalysisModel:
                 values[position] = row.value
 
         component = indicator.category.code if indicator.category else "PDO"
+        severities = flagged.get(indicator.code, {})
+        reporting = sum(1 for value in values if value is not None)
+
+        # A flag against the national figure itself. Not a judgement anyone
+        # entered by hand: a total assembled from half the states is a partial
+        # total whatever its findings say, and a reader deserves to be told so
+        # before quoting it.
+        national_flag = None
+        note_parts = list(notes.get(indicator.code, []))
+        if reporting and reporting < len(states):
+            missing = len(states) - reporting
+            band = "H" if reporting * 2 < len(states) else "M"
+            national_flag = band
+            note_parts.insert(
+                0,
+                f"Only {reporting} of {len(states)} reporting states supplied this "
+                f"figure; the national total is short by {missing} state"
+                f"{'s' if missing != 1 else ''}.",
+            )
+
         rows.append(
             IndicatorRow(
                 code=indicator.code,
@@ -260,7 +431,12 @@ def build(db: Session, period_code: str) -> AnalysisModel:
                 achievement_pct=national.achievement_pct,
                 status=national.status,
                 states=values,
-                flagged_states=sorted(flagged.get(indicator.code, set())),
+                flagged_states=sorted(severities),
+                flag_severity=severities,
+                national_flag=national_flag,
+                flag_note=" ".join(note_parts),
+                reporting=reporting,
+                expected=len(states),
             )
         )
 
@@ -270,8 +446,11 @@ def build(db: Session, period_code: str) -> AnalysisModel:
         states=[state.name for state in states],
         state_codes=[state.code for state in states],
         indicators=rows,
-        flags=_flags(db, period, submissions),
+        flags=_flags(db, period, {sid: state_name.get(code, code)
+                                  for sid, code in submissions.items()}),
         states_reporting=len(submissions),
+        cohorts=cohorts,
+        cohort_names=cohort_names,
     )
 
 
@@ -283,6 +462,14 @@ def to_payload(model: AnalysisModel) -> dict:
         "states": model.states,
         "state_codes": model.state_codes,
         "states_reporting": model.states_reporting,
+        "cohorts": [
+            {
+                "code": code,
+                "name": model.cohort_names.get(code, code),
+                "states": members,
+            }
+            for code, members in model.cohorts.items()
+        ],
         "components": [
             {
                 "code": code,
@@ -303,7 +490,16 @@ def to_payload(model: AnalysisModel) -> dict:
                 "achievement_pct": row.achievement_pct,
                 "status": row.status,
                 "states": row.states,
+                "display": [row.display(value) for value in row.states],
+                "national_display": row.national_display,
+                "rate": row.is_rate,
+                "boolean": row.is_boolean,
                 "flagged_states": row.flagged_states,
+                "flag_severity": row.flag_severity,
+                "national_flag": row.national_flag,
+                "flag_note": row.flag_note,
+                "reporting": row.reporting,
+                "expected": row.expected,
             }
             for row in model.indicators
         ],
@@ -314,6 +510,9 @@ def to_payload(model: AnalysisModel) -> dict:
                 "indicator": flag.indicator,
                 "states": flag.states,
                 "issue": flag.issue,
+                "details": [
+                    {"state": state, "issue": message} for state, message in flag.details
+                ],
             }
             for flag in model.flags
         ],

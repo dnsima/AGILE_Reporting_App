@@ -27,7 +27,8 @@ class ReconciliationLineRead(BaseModel):
     parts_expected: list[str] = Field(default_factory=list)
     parts_reported: list[str] = Field(default_factory=list)
     part_values: dict[str, float] = Field(default_factory=dict)
-    is_quarantined: bool = False
+    #: The figure carries an open finding; it still counts.
+    is_flagged: bool = False
     #: Set on a mismatch that would reconcile exactly under another basis: the
     #: figure may be right and the indicator's time basis wrong.
     reconciles_as: str | None = None

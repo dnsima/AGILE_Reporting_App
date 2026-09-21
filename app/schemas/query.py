@@ -62,8 +62,12 @@ class QueryRead(BaseModel):
     #: The figure as it currently stands, which differs from ``reported_value``
     #: once a restatement has been accepted.
     current_value: float | None = None
-    #: True while the figure is held out of every aggregation.
-    is_quarantined: bool = False
+    #: What the platform is saying about this figure: CLEAN, QUERIED, UNFIT
+    #: or CORRECTED. Never "excluded" -- every reported figure counts towards
+    #: the national totals whatever its label, because excluding the doubtful
+    #: ones made this platform's totals disagree with the NPCU's own published
+    #: report. The label says what to trust, not what was counted.
+    disclosure: str = "CLEAN"
     status: str
     resolution: str | None = None
     resolution_note: str | None = None

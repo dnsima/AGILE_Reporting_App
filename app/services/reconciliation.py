@@ -209,7 +209,9 @@ class ReconciliationLine:
     parts_expected: list[str] = field(default_factory=list)
     parts_reported: list[str] = field(default_factory=list)
     part_values: dict[str, float] = field(default_factory=dict)
-    is_quarantined: bool = False
+    #: The figure carries an open finding. It still counts towards every
+    #: total -- the label says what to trust, not what was counted.
+    is_flagged: bool = False
     #: A basis under which this line would have reconciled exactly. Set only on
     #: a mismatch, and it means the indicator's own basis may be wrong rather
     #: than the figure.
@@ -558,7 +560,7 @@ def reconcile_state(
                 parts_expected=parts_expected,
                 parts_reported=contributing,
                 part_values=part_values,
-                is_quarantined=bool(coarse_row and not coarse_row.is_valid),
+                is_flagged=bool(coarse_row and not coarse_row.is_valid),
                 reconciles_as=alternative,
             )
         )

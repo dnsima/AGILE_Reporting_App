@@ -134,6 +134,10 @@ window.AgileCharts = (function () {
       viewBox: "0 0 " + width + " " + height,
       preserveAspectRatio: "xMidYMid meet",
       role: "img",
+      // A natural width so a wide chart scrolls in its box rather than being
+      // squeezed until its labels collide. The stylesheet still lets a chart
+      // in a narrow panel scale down to 100%.
+      width: width,
     });
     host.appendChild(node);
     return node;
@@ -239,12 +243,6 @@ window.AgileCharts = (function () {
     });
     if (!categories.length || !series.length) return empty(host, options.emptyMessage);
 
-    const width = 720;
-    const height = 280;
-    const margin = { top: 12, right: 14, bottom: 46, left: 46 };
-    const plotWidth = width - margin.left - margin.right;
-    const plotHeight = height - margin.top - margin.bottom;
-
     let max = 0;
     series.forEach(function (s) {
       (s.values || []).forEach(function (v) {
@@ -252,6 +250,31 @@ window.AgileCharts = (function () {
       });
     });
     max = niceMax(max);
+
+    // A crowded chart needs room, not a smaller font. Eighteen states with
+    // three series each was drawing "AdamawaBauchi" as one word and stacking
+    // the value labels on top of one another, so the width grows with the
+    // number of groups and the labels turn on their side when they must.
+    const crowded = categories.length > 8;
+    // Sized so eighteen states and three series still land inside a
+    // full-width card rather than scrolling off the right of it. A chart a
+    // reader has to drag sideways is one they will read only half of.
+    const width = Math.max(options.width || 720, categories.length * (20 * series.length + 14));
+    // Ticks are drawn to the left of the axis, so the margin has to clear the
+    // longest one. At 46px a "1,000,000" tick was cut to ",000,000".
+    const tickWidth = fmt(max, max >= 100 ? 0 : 1).length * 6.6 + 12;
+    const margin = {
+      // A rotated value label stands up off the top of its bar, so the tallest
+      // bar needs that much clearance or its label is cut in half -- "100%"
+      // was rendering as "10".
+      top: crowded ? 46 : 18,
+      right: 14,
+      bottom: crowded ? 74 : 46,
+      left: Math.max(46, tickWidth),
+    };
+    const height = (options.height || 280) + (crowded ? 28 : 0);
+    const plotWidth = width - margin.left - margin.right;
+    const plotHeight = height - margin.top - margin.bottom;
     const scaleY = (v) => margin.top + plotHeight - (v / max) * plotHeight;
 
     const node = svg(host, width, height);
@@ -282,20 +305,33 @@ window.AgileCharts = (function () {
           fmt(value) + (options.suffix || ""));
         node.appendChild(bar);
 
-        if (series.length <= 4) {
+        // The direct label is the relief for a fill that sits below 3:1, so
+        // it is dropped only when the bars are too narrow to carry it --
+        // where it would overlap its neighbour and be unreadable anyway.
+        if (series.length <= 4 && barWidth >= 14) {
           node.appendChild(
-            el("text", { x: x + barWidth / 2, y: y - 5, "text-anchor": "middle" }, {
+            el("text", {
+              x: x + barWidth / 2,
+              y: y - 5,
+              "text-anchor": crowded ? "start" : "middle",
+              transform: crowded ? "rotate(-90 " + (x + barWidth / 2) + " " + (y - 5) + ")" : null,
+            }, {
               fill: "var(--chart-ink)", "font-size": "9px", "font-weight": "600",
             })
           ).textContent = fmt(value, 0) + (options.suffix || "");
         }
       });
 
+      const labelX = groupX + groupWidth / 2;
+      const labelY = margin.top + plotHeight + (crowded ? 10 : 16);
       node.appendChild(
         el("text", {
-          x: groupX + groupWidth / 2, y: margin.top + plotHeight + 16, "text-anchor": "middle",
+          x: labelX,
+          y: labelY,
+          "text-anchor": crowded ? "end" : "middle",
+          transform: crowded ? "rotate(-45 " + labelX + " " + labelY + ")" : null,
         }, { fill: "var(--chart-muted)", "font-size": "10px" })
-      ).textContent = truncate(category, 16);
+      ).textContent = truncate(category, crowded ? 14 : 16);
     });
 
     legend(host, series.map(function (s, i) {

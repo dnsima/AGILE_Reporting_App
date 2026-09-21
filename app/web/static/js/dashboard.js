@@ -10,20 +10,22 @@
   const api = window.AgileApi;
   const charts = window.AgileCharts;
 
+  /* The only scope is the period. Cohort, category and KPI were global
+     filters once; they now live where they belong -- cohort as a dimension
+     two overview charts cut by, category as the component tabs themselves,
+     and a KPI as a row in its component's table. stateCode survives only to
+     hold a state PIU inside its own data. */
   const state = {
     user: null,
     period: null,
-    cohort: "",
     stateCode: "",
-    category: "",
-    indicator: "",
     view: "overview",
     periods: [],
     states: [],
     cohorts: [],
-    categories: [],
-    indicators: [],
+    components: [],
     dataVersion: 0,
+    analysisStale: false,
     loading: false,
     queryFilter: "open",
     queryState: "",
@@ -114,18 +116,16 @@
     }
 
     try {
-      const [periods, states, cohorts, categories, indicators] = await Promise.all([
+      const [periods, states, cohorts, components] = await Promise.all([
         api.get("/reference/periods"),
         api.get("/reference/states"),
         api.get("/reference/cohorts"),
         api.get("/reference/indicator-categories"),
-        api.get("/reference/indicators"),
       ]);
       state.periods = periods;
       state.states = states;
       state.cohorts = cohorts;
-      state.categories = categories;
-      state.indicators = indicators;
+      state.components = components;
     } catch (error) {
       return fail(error, "Loading reference data");
     }
@@ -146,26 +146,11 @@
     state.period = defaultPeriod;
     periodSelect.value = defaultPeriod;
 
-    $("filter-cohort").innerHTML =
-      '<option value="">All cohorts</option>' +
-      state.cohorts.map((c) => '<option value="' + c.code + '">' + c.name + " (" + c.state_count + ")</option>").join("");
-
     const stateOptions = state.states
       .map((s) => '<option value="' + s.code + '">' + s.name + "</option>")
       .join("");
-    $("filter-state").innerHTML = '<option value="">All states</option>' + stateOptions;
-    if (state.stateCode) {
-      $("filter-state").value = state.stateCode;
-      if (state.user.role === "STATE_PIU") $("filter-state").disabled = true;
-    }
 
-    $("filter-category").innerHTML =
-      '<option value="">All categories</option>' +
-      state.categories.map((c) => '<option value="' + c.code + '">' + c.name + "</option>").join("");
-
-    refreshIndicatorFilter();
-
-    // Upload + report forms reuse the same reference lists.
+    // Upload + report forms still need the reference lists.
     $("upload-state").innerHTML = stateOptions;
     if (state.stateCode) {
       $("upload-state").value = state.stateCode;
@@ -185,7 +170,11 @@
 
     $("report-period").innerHTML = $("upload-period").innerHTML;
     $("report-period").value = defaultPeriod;
-    $("report-category").innerHTML = $("filter-category").innerHTML;
+    $("report-category").innerHTML =
+      '<option value="">All indicators</option>' +
+      state.components
+        .map((c) => '<option value="' + c.code + '">' + c.name + "</option>")
+        .join("");
     syncReportScopeRef();
   }
 
@@ -196,19 +185,6 @@
     const closed = pool.filter((p) => p.end_date <= today);
     const chosen = (closed.length ? closed : pool).slice(-1)[0];
     return chosen ? chosen.code : (state.periods[0] || {}).code;
-  }
-
-  function refreshIndicatorFilter() {
-    const pool = state.category
-      ? state.indicators.filter((i) => i.category_code === state.category)
-      : state.indicators;
-    $("filter-indicator").innerHTML = pool
-      .map((i) => '<option value="' + i.code + '">' + i.number + ". " + i.name + "</option>")
-      .join("");
-    if (!pool.some((i) => i.code === state.indicator)) {
-      state.indicator = pool.length ? pool[0].code : "";
-    }
-    $("filter-indicator").value = state.indicator;
   }
 
   function wireEvents() {
@@ -227,34 +203,6 @@
       state.period = this.value;
       render();
     });
-    $("filter-cohort").addEventListener("change", function () {
-      state.cohort = this.value;
-      render();
-    });
-    $("filter-state").addEventListener("change", function () {
-      state.stateCode = this.value;
-      render();
-    });
-    $("filter-category").addEventListener("change", function () {
-      state.category = this.value;
-      refreshIndicatorFilter();
-      render();
-    });
-    $("filter-indicator").addEventListener("change", function () {
-      state.indicator = this.value;
-      render();
-    });
-    $("reset-filters").addEventListener("click", function () {
-      state.cohort = "";
-      state.category = "";
-      if (state.user.role !== "STATE_PIU") state.stateCode = "";
-      $("filter-cohort").value = "";
-      $("filter-category").value = "";
-      if (state.user.role !== "STATE_PIU") $("filter-state").value = "";
-      refreshIndicatorFilter();
-      render();
-    });
-
     $("logout-btn").addEventListener("click", async function () {
       await api.logout();
       window.location.href = "/login";
@@ -342,6 +290,9 @@
         if (event && event.payload && event.payload.state) {
           pushActivity(event);
         }
+        // A new return or a settled query changes the figures, so the drawn
+        // model is stale even though the period has not changed.
+        state.analysisStale = true;
         render(true);
       },
       onError: function () {
@@ -362,6 +313,7 @@
         if (info.data_version !== state.dataVersion) {
           state.dataVersion = info.data_version;
           (info.recent || []).slice(0, 3).forEach(pushActivity);
+          state.analysisStale = true;
           render(true);
         }
       } catch (error) {
@@ -396,12 +348,11 @@
     state.loading = true;
     if (!quiet) $("filter-status").textContent = "Loading…";
     try {
-      if (state.view === "overview") await renderOverview();
-      else if (state.view === "kpis") await renderKpis();
-      else if (state.view === "cohorts") await renderCohorts();
-      else if (state.view === "quality") await renderQuality();
+      /* Six of the nine tabs are views of one payload, so they are loaded
+         once and drawn together. Switching between them redraws nothing and
+         re-requests nothing -- which is also why they cannot disagree. */
+      if (ANALYSIS_VIEWS.indexOf(state.view) !== -1) await renderAnalysis();
       else if (state.view === "queries") await renderQueries();
-      else if (state.view === "states") await renderStates();
       else if (state.view === "upload") await renderUpload();
       else if (state.view === "reports") await renderReports();
       $("filter-status").textContent =
@@ -414,502 +365,21 @@
     }
   }
 
-  function scopeParams() {
-    // stateCode has to travel with the request. The filter set it and nothing
-    // sent it, so choosing a state redrew the same national board and the
-    // control looked broken because nothing downstream ever saw it.
-    return {
-      period: state.period,
-      cohort: state.cohort || undefined,
-      state: state.stateCode || undefined,
-    };
-  }
+  /* The tabs the analysis model feeds. */
+  const ANALYSIS_VIEWS = ["overview", "pdo", "c1", "c2", "c3", "quality"];
 
-  function selectedPeriodType() {
-    const period = state.periods.find((p) => p.code === state.period);
-    return period ? period.period_type : undefined;
-  }
-
-  // -- overview ------------------------------------------------------------
-  async function renderOverview() {
-    const overview = await api.get("/dashboard/overview", scopeParams());
-    state.dataVersion = overview.data_version;
-
-    $("kpi-tiles").innerHTML = overview.tiles
-      .map(function (tile) {
-        const unit = tile.unit === "%" || tile.unit === "/100" ? tile.unit : "";
-        return (
-          '<div class="tile ' + slug(tile.status) + '">' +
-          '<div class="label">' + tile.label + "</div>" +
-          '<div class="value">' + num(tile.value) + '<span class="unit">' + unit + "</span></div>" +
-          '<div class="caption">' + (tile.caption || "") + "</div></div>"
-        );
-      })
-      .join("");
-
-    const dimensions = (overview.dqa_summary.dimensions || []).map(function (d) {
-      return {
-        label: d.dimension.charAt(0) + d.dimension.slice(1).toLowerCase(),
-        value: d.score,
-        status: d.score >= 90 ? "On track" : d.score >= 70 ? "Progressing" : d.score >= 50 ? "Lagging" : "Off track",
-        note: "Grade: " + (d.grade || "—") + " · weight " + d.weight,
-      };
-    });
-    charts.barChart("chart-dqa-dimensions", {
-      data: dimensions,
-      max: 100,
-      suffix: "",
-      valueLabel: "Score",
-      labelWidth: 120,
-      reference: 90,
-      referenceLabel: "90 target",
-      emptyMessage: "No submissions have been scored for this period yet.",
-    });
-
-    charts.barChart("chart-cohort-achievement", {
-      data: (overview.cohorts || []).map(function (row, index) {
-        return {
-          label: row.cohort_name,
-          value: row.average_achievement_pct,
-          color: charts.SERIES[index % charts.SERIES.length],
-          note: row.states_reporting + "/" + row.states_expected + " states reporting",
-        };
-      }),
-      suffix: "%",
-      valueLabel: "Average achievement",
-      labelWidth: 170,
-      reference: 100,
-      referenceLabel: "target",
-      // Two different things leave this chart empty, and saying the wrong one
-      // sends someone looking for data that already arrived.
-      emptyMessage: (overview.cohorts || []).some((row) => row.states_reporting)
-        ? "Achievement needs approved state targets, and none are set for this period."
-        : "No state has submitted for this period yet.",
-    });
-
-    const status = overview.reporting_status;
-    $("reporting-caption").textContent = "Deadline " + status.due_date;
-    $("reporting-status").innerHTML =
-      '<div class="kv">' +
-      '<div><dt>States expected</dt><dd>' + status.states_expected + "</dd></div>" +
-      '<div><dt>Submitted</dt><dd>' + status.states_submitted + "</dd></div>" +
-      '<div><dt>Cleared for analysis</dt><dd>' + status.states_approved + "</dd></div>" +
-      '<div><dt>On-time rate</dt><dd>' + pct(status.on_time_rate_pct) + "</dd></div>" +
-      "</div>" +
-      table(
-        [
-          { label: "Cohort", key: "cohort_name" },
-          { label: "States", key: "states_expected", num: true },
-          { label: "Reporting", num: true, render: (r) => pct(r.reporting_rate_pct) },
-          { label: "On time", num: true, render: (r) => pct(r.on_time_rate_pct) },
-          { label: "Completeness", num: true, render: (r) => pct(r.completeness_pct) },
-          { label: "Avg DQA", num: true, render: (r) => num(r.average_dqa_score) },
-          { label: "Grade", render: (r) => badge(r.dqa_grade) },
-        ],
-        overview.cohorts || []
-      );
-  }
-
-  // -- KPI performance -----------------------------------------------------
-  async function renderKpis() {
-    if (!state.indicator) {
-      charts.empty("chart-trend", "Select a KPI in the filter bar.");
-      return;
-    }
-    const scope = state.stateCode ? "STATE" : state.cohort ? "COHORT" : "NATIONAL";
-
-    const [analysis, trend, contribution, board] = await Promise.all([
-      api.get("/analytics/indicators/" + state.indicator, {
-        period: state.period,
-        cohort: state.cohort || undefined,
-      }),
-      api.get("/analytics/trend/" + state.indicator, {
-        scope: scope,
-        state: state.stateCode || undefined,
-        cohort: state.cohort || undefined,
-        // Keep the series inside the selected period's family.
-        period_type: selectedPeriodType(),
-        periods: 8,
-      }),
-      api.get("/analytics/contribution/" + state.indicator, { period: state.period }),
-      api.get("/analytics/scorecard", {
-        period: state.period,
-        scope: scope,
-        state: state.stateCode || undefined,
-        cohort: state.cohort || undefined,
-        category: state.category || undefined,
-      }),
-    ]);
-
-    const indicator = analysis.indicator;
-    const suffix = indicator.unit === "PERCENT" ? "%" : "";
-
-    $("trend-title").textContent = indicator.code + " trend — " + (trend.scope_label || "National");
-    charts.lineChart("chart-trend", {
-      labels: trend.points.map((p) => p.period_label),
-      series: [
-        { name: "Reported", values: trend.points.map((p) => p.value) },
-        { name: "Target", values: trend.points.map((p) => p.target), dashed: true },
-      ],
-      suffix: suffix,
-    });
-
-    charts.barChart("chart-contribution", {
-      data: contribution.rows.slice(0, 12).map(function (row) {
-        return {
-          label: row.state_name,
-          value: row.contribution_pct,
-          note: "Value: " + num(row.value) + suffix + " · rank " + row.rank,
-        };
-      }),
-      suffix: "%",
-      valueLabel: "Contribution",
-      emptyMessage: "No state contributed a measurable value for this KPI.",
-    });
-
-    const national = analysis.national;
-    $("indicator-caption").textContent = indicator.code + " · " + indicator.name;
-    $("indicator-analysis").innerHTML =
-      "<h3>Layer 2 — national performance against the national target</h3>" +
-      '<div class="kv">' +
-      "<div><dt>National value</dt><dd>" + num(national.value) + suffix + "</dd></div>" +
-      "<div><dt>National target</dt><dd>" + num(national.target) + suffix + "</dd></div>" +
-      "<div><dt>Achievement</dt><dd>" + pct(national.achievement_pct) + "</dd></div>" +
-      "<div><dt>Status</dt><dd>" + badge(national.status) + "</dd></div>" +
-      "<div><dt>States reporting</dt><dd>" + national.states_reporting + "/" + national.states_expected + "</dd></div>" +
-      "<div><dt>Aggregation</dt><dd style='font-size:.82rem'>" + national.aggregation_method + "</dd></div>" +
-      "</div>" +
-      "<h3>Cohort disaggregation</h3>" +
-      table(
-        [
-          { label: "Cohort", key: "cohort_name" },
-          { label: "Value", num: true, render: (r) => num(r.value) + suffix },
-          { label: "Target", num: true, render: (r) => num(r.target) },
-          { label: "Achievement", num: true, render: (r) => pct(r.achievement_pct) },
-          { label: "Contribution", num: true, render: (r) => pct(r.contribution_pct) },
-          { label: "Reporting", num: true, render: (r) => r.states_reporting + "/" + r.states_expected },
-          { label: "Status", render: (r) => badge(r.status) },
-        ],
-        analysis.cohorts
-      ) +
-      "<h3>Layer 1 &amp; 3 — state performance and contribution</h3>" +
-      '<div class="table-scroll">' +
-      table(
-        [
-          { label: "State", key: "state_name" },
-          { label: "Cohort", key: "cohort_code" },
-          { label: "Value", num: true, render: (r) => num(r.value) + (r.value === null ? "" : suffix) },
-          { label: "Target", num: true, render: (r) => num(r.target) },
-          { label: "Achievement", num: true, render: (r) => pct(r.achievement_pct) },
-          { label: "Contribution", num: true, render: (r) => pct(r.contribution_pct) },
-          { label: "Status", render: (r) => badge(r.status) },
-        ],
-        analysis.states
-      ) +
-      "</div>";
-
-    $("scorecard-table").innerHTML = table(
-      [
-        { label: "KPI", render: (r) => r.indicator.code },
-        { label: "Indicator", render: (r) => r.indicator.name },
-        { label: "Unit", render: (r) => r.indicator.unit },
-        { label: "Value", num: true, render: (r) => num(r.value) },
-        { label: "Target", num: true, render: (r) => num(r.target) },
-        { label: "Achievement", num: true, render: (r) => pct(r.achievement_pct) },
-        { label: "Status", render: (r) => badge(r.status) },
-      ],
-      board.rows
-    );
-  }
-
-  // -- cohorts -------------------------------------------------------------
-  async function renderCohorts() {
-    const summaries = await api.get("/cohorts/summary", {
-      period: state.period,
-      category: state.category || undefined,
-    });
-
-    $("cohort-table").innerHTML = table(
-      [
-        { label: "Cohort", key: "cohort_name" },
-        { label: "States", key: "states_expected", num: true },
-        { label: "Reporting", num: true, render: (r) => pct(r.reporting_rate_pct) },
-        { label: "On time", num: true, render: (r) => pct(r.on_time_rate_pct) },
-        { label: "Completeness", num: true, render: (r) => pct(r.completeness_pct) },
-        { label: "Avg DQA", num: true, render: (r) => num(r.average_dqa_score) },
-        { label: "DQA grade", render: (r) => badge(r.dqa_grade) },
-        { label: "Avg achievement", num: true, render: (r) => pct(r.average_achievement_pct) },
-        { label: "On track", num: true, render: (r) => r.indicators_on_track + "/" + r.indicators_assessed },
-        { label: "Contribution", num: true, render: (r) => pct(r.contribution_pct) },
-        { label: "Strongest", key: "best_state" },
-        { label: "Needs support", key: "weakest_state" },
-      ],
-      summaries
-    );
-
-    charts.groupedBarChart("chart-cohort-reporting", {
-      categories: summaries.map((r) => r.cohort_name),
-      series: [
-        { name: "Reporting rate", values: summaries.map((r) => r.reporting_rate_pct) },
-        { name: "On-time rate", values: summaries.map((r) => r.on_time_rate_pct) },
-        { name: "Completeness", values: summaries.map((r) => r.completeness_pct) },
-      ],
-      suffix: "%",
-    });
-
-    charts.barChart("chart-cohort-dqa", {
-      data: summaries.map(function (row, index) {
-        return {
-          label: row.cohort_name,
-          value: row.average_dqa_score,
-          color: charts.SERIES[index % charts.SERIES.length],
-          note: "Grade: " + row.dqa_grade,
-        };
-      }),
-      max: 100,
-      valueLabel: "Average DQA score",
-      labelWidth: 170,
-      reference: 60,
-      referenceLabel: "gate",
-    });
-
-    if (state.cohort) {
-      const ranking = await api.get("/cohorts/" + state.cohort + "/states", {
-        period: state.period,
-        indicator: state.indicator || undefined,
-      });
-      $("within-cohort-table").innerHTML = table(
-        [
-          { label: "#", key: "rank", num: true },
-          { label: "State", key: "state_name" },
-          { label: "Avg achievement", num: true, render: (r) => pct(r.average_achievement_pct) },
-          { label: "On track", num: true, render: (r) => r.indicators_on_track },
-          { label: "KPIs reported", num: true, render: (r) => r.indicators_with_data },
-          { label: "DQA", num: true, render: (r) => num(r.dqa_score) },
-          { label: "Grade", render: (r) => badge(r.dqa_grade) },
-          { label: "Days late", num: true, render: (r) => (r.days_late === null ? "—" : r.days_late) },
-        ],
-        ranking
-      );
-    } else {
-      $("within-cohort-table").innerHTML =
-        '<p class="muted">Pick a cohort in the filter bar to rank the states inside it.</p>';
-    }
-  }
-
-  // -- data quality ---------------------------------------------------------
-  async function renderQuality() {
-    const [summary, heat] = await Promise.all([
-      api.get("/quality/national", {
-        period: state.period,
-        state: state.stateCode || undefined,
-        cohort: state.cohort || undefined,
-      }),
-      api.get("/dashboard/dqa-heatmap", { periods: 6, period_type: selectedPeriodType() }),
-    ]);
-
-    const scoped = Boolean(state.stateCode);
-    $("dqa-panel-title").textContent = scoped
-      ? "Data quality — " + (summary.scorecards[0] || {}).state_name
-      : "National DQA summary";
-    $("dqa-caption").textContent =
-      summary.states_reported + " of " + summary.states_expected + " states assessed";
-    $("dqa-summary").innerHTML =
-      '<div class="kv">' +
-      // The verdict leads. The score says how many checks passed, which is a
-      // different question and was being read as the answer to this one.
-      '<div><dt>Fit for use</dt><dd>' +
-      (scoped
-        ? badge((summary.scorecards[0] || {}).fitness_verdict || "No data")
-        : summary.states_not_fit + " of " + summary.states_reported + " not fit") +
-      "</dd></div>" +
-      "<div><dt>" + (scoped ? "DQA score" : "National score") + "</dt><dd>" +
-      num(summary.national_score) + "</dd></div>" +
-      "<div><dt>Grade</dt><dd>" + badge(summary.grade) + "</dd></div>" +
-      // Not "figures counting": every figure counts towards the totals now.
-      // What varies is how many carry an open finding.
-      "<div><dt>Figures unencumbered</dt><dd>" + pct(summary.usable_share_pct) +
-      '<span style="display:block;font-size:.72rem;font-weight:400;color:var(--text-muted)">' +
-      summary.figures_counting + " of " + summary.figures_reported +
-      " carry no open finding</span></dd></div>" +
-      "<div><dt>Reporting rate</dt><dd>" + pct(summary.reporting_rate_pct) + "</dd></div>" +
-      "<div><dt>On-time rate</dt><dd>" + pct(summary.on_time_rate_pct) + "</dd></div>" +
-      "</div>" +
-      table(
-        [
-          { label: "Dimension", render: (r) => r.dimension.charAt(0) + r.dimension.slice(1).toLowerCase() },
-          {
-            label: "Score",
-            num: true,
-            render: (r) => (r.score === null ? "not assessed" : num(r.score)),
-          },
-          { label: "Grade", render: (r) => (r.score === null ? "—" : badge(r.grade)) },
-          { label: "Weight", num: true, render: (r) => num(r.weight, 1) },
-          { label: "Checks run", key: "checks_run", num: true },
-          { label: "Checks failed", key: "checks_failed", num: true },
-        ],
-        summary.dimension_averages
-      ) +
-      (summary.grade_note
-        ? '<p class="grade-note">' + esc(summary.grade_note) + "</p>"
-        : "");
-
-    $("dqa-table").innerHTML = table(
-      [
-        { label: "State", key: "state_name" },
-        { label: "Cohort", key: "cohort_code" },
-        { label: "Status", render: (r) => badge(r.status) },
-        {
-          label: "Fit for use",
-          render: (r) => badge(r.fitness_verdict || "No data"),
-        },
-        { label: "Score", num: true, render: (r) => num(r.overall_score) },
-        { label: "Grade", render: (r) => badge(r.grade) },
-        {
-          label: "In doubt",
-          num: true,
-          render: (r) =>
-            r.exposed_share_pct === null || r.exposed_share_pct === undefined
-              ? "—"
-              : num(r.exposed_share_pct, 1) + "%",
-        },
-        { label: "Errors", key: "error_count", num: true },
-        { label: "Warnings", key: "warning_count", num: true },
-        { label: "Days late", num: true, render: (r) => (r.days_late === null ? "—" : r.days_late) },
-        {
-          // A capped grade always travels with its reason.
-          label: "Why the grade",
-          render: (r) =>
-            r.grade_note
-              ? esc(r.grade_note)
-              : r.top_issues && r.top_issues.length
-                ? esc(r.top_issues[0].message)
-                : "—",
-        },
-      ],
-      summary.scorecards
-    );
-
-    charts.heatmap("chart-dqa-heatmap", {
-      rows: heat.rows,
-      columns: heat.columns,
-      cells: heat.cells,
-      rowLabels: heat.row_labels,
-      columnLabels: heat.column_labels,
-      min: heat.scale_min,
-      max: heat.scale_max,
-      scaleLabel: "DQA score · " + (heat.grade || ""),
-    });
-
-    $("common-issues").innerHTML = table(
-      [
-        { label: "Rule", key: "rule_code" },
-        { label: "Dimension", render: (r) => r.dimension.charAt(0) + r.dimension.slice(1).toLowerCase() },
-        { label: "States affected", key: "states_affected", num: true },
-        { label: "Share", num: true, render: (r) => r.share_pct + "%" },
-      ],
-      summary.common_issues
-    );
-
-    await renderReconciliation();
-  }
-
-  // -- tracker reconciliation ------------------------------------------------
-  async function renderReconciliation() {
-    let report;
-    try {
-      report = await api.get("/reconciliation", {
-        period: state.period,
-        state: state.stateCode || undefined,
-      });
-    } catch (error) {
-      // Reconciliation only makes sense for a period that decomposes.
-      $("reconciliation-summary").innerHTML =
-        '<p class="muted">' + esc(error.message || "Not available for this period.") + "</p>";
-      $("reconciliation-table").innerHTML = "";
-      $("reconciliation-lines").innerHTML = "";
-      return;
-    }
-
-    const s = report.summary;
-    if (!s.child_period_type) {
-      // A month has nothing finer inside it to reconcile against.
-      $("reconciliation-caption").textContent = "Select a quarter to reconcile";
-      $("reconciliation-summary").innerHTML =
-        '<p class="muted">' + esc(s.period_label) +
-        " has no finer reporting period inside it. Reconciliation compares a quarter " +
-        "against its own months.</p>";
-      $("reconciliation-table").innerHTML = "";
-      $("reconciliation-lines").innerHTML = "";
-      return;
-    }
-
-    const grain = s.child_period_type.toLowerCase();
-    $("reconciliation-caption").textContent =
-      s.states_tracking + " of " + s.states + " states have filed a " + grain +
-      " return for " + s.period_label + " (" + s.states_with_complete_tracker + " complete)";
-
-    if (!s.judged) {
-      $("reconciliation-summary").innerHTML =
-        '<p class="muted">No state has filed enough of the ' + esc(grain) +
-        " tracker for this period to reconcile anything yet.</p>";
-      $("reconciliation-table").innerHTML = "";
-      $("reconciliation-lines").innerHTML = "";
-      return;
-    }
-
-    $("reconciliation-summary").innerHTML =
-      '<div class="kv">' +
-      "<div><dt>States tracking</dt><dd>" + s.states_tracking + " of " + s.states +
-      "</dd></div>" +
-      "<div><dt>Figures reconciled</dt><dd>" + s.judged + "</dd></div>" +
-      "<div><dt>Agree</dt><dd>" + s.matched + "</dd></div>" +
-      "<div><dt>Agreement</dt><dd>" + pct(s.agreement) + "</dd></div>" +
-      "<div><dt>Disagree</dt><dd>" + (s.by_status.MISMATCH || 0) + "</dd></div>" +
-      "<div><dt>States with work to do</dt><dd>" +
-      (s.states_unreconciled.length ? esc(s.states_unreconciled.join(", ")) : "none") +
-      "</dd></div>" +
-      "</div>";
-
-    const reporting = report.states.filter((row) => row.parts_reported.length);
-    $("reconciliation-table").innerHTML = table(
-      [
-        { label: "State", render: (r) => esc(r.state_name) },
-        { label: "Cohort", key: "cohort_code" },
-        {
-          label: "Tracker returns",
-          render: (r) => r.parts_reported.length + " of " + r.parts_expected.length,
-        },
-        { label: "Reconciled", key: "judged", num: true },
-        { label: "Agree", key: "matched", num: true },
-        { label: "Disagree", key: "mismatched", num: true },
-        { label: "Missing from quarter", key: "framework_missing", num: true },
-        { label: "Missing from tracker", key: "tracker_missing", num: true },
-        { label: "Agreement", num: true, render: (r) => pct(r.agreement) },
-      ],
-      reporting
-    );
-
-    const lines = [];
-    report.states.forEach(function (row) {
-      row.lines.forEach(function (line) {
-        if (line.status === "MATCHED" || line.status === "INCOMPLETE") return;
-        lines.push(Object.assign({ state_name: row.state_name }, line));
-      });
-    });
-
-    $("reconciliation-lines").innerHTML = table(
-      [
-        { label: "State", render: (r) => esc(r.state_name) },
-        { label: "Code", render: (r) => esc(r.indicator_code) },
-        { label: "Verdict", render: (r) => badge(r.status.replace(/_/g, " ").toLowerCase()) },
-        { label: "Tracker implies", num: true, render: (r) => num(r.fine_value) },
-        { label: "Quarterly return", num: true, render: (r) => num(r.coarse_value) },
-        { label: "Variance", num: true, render: (r) => num(r.variance) },
-        { label: "Why", render: (r) => esc(r.note) },
-      ],
-      lines
-    );
+  /**
+   * Load the analysis model and draw every panel from it.
+   *
+   * Drawn once per period, not once per tab. The old board redrew each panel
+   * from its own request when you switched to it, which is how the panels
+   * came to disagree in the first place.
+   */
+  async function renderAnalysis() {
+    const drawn = window.AGILEAnalysis.model();
+    if (drawn && drawn.period_code === state.period && !state.analysisStale) return;
+    await window.AGILEAnalysis.load(api, state.period);
+    state.analysisStale = false;
   }
 
   // -- query resolution ------------------------------------------------------
@@ -990,7 +460,7 @@
         { label: "Status", render: (r) => badge(r.status.toLowerCase()) },
         {
           label: "Figure",
-          render: (r) => (r.is_quarantined ? badge("quarantined") : badge("counting")),
+          render: (r) => badge(DISCLOSURE_LABEL[r.disclosure] || "counting"),
         },
       ],
       rows
@@ -1040,7 +510,7 @@
       query.reference + " · " + (query.indicator_code || "submission") + " · " + query.state_name;
 
     const finding =
-      '<div class="finding' + (query.is_quarantined ? " blocking" : "") + '">' +
+      '<div class="finding' + (query.disclosure === "UNFIT" ? " blocking" : "") + '">' +
       '<div class="rule">' + esc(query.rule_code || "finding") + " · " +
       esc(query.dimension || "") + " · " + esc(query.severity || "") + "</div>" +
       "<p>" + esc(query.title) + "</p>" +
@@ -1098,14 +568,29 @@
     wireQueryActions(query);
   }
 
-  /** Whether the figure counts, and if not, what is still holding it. */
+  /* What the platform is saying about a figure. Never "excluded": every
+     reported figure counts towards the national totals whatever its label.
+     Holding the doubtful ones out made this platform's totals disagree with
+     the NPCU's own published report by nearly 200,000 on one indicator, so
+     the label now says what to trust, not what was counted. */
+  const DISCLOSURE_LABEL = {
+    CLEAN: "clean",
+    QUERIED: "queried",
+    UNFIT: "not fit for use",
+    CORRECTED: "corrected",
+  };
+
+  /** How the figure stands: it counts either way, but here is what it carries. */
   function figureStanding(query) {
-    if (!query.is_quarantined) return "counting";
+    const label = DISCLOSURE_LABEL[query.disclosure] || "counting";
+    if (query.disclosure === "CLEAN" || query.disclosure === "CORRECTED") {
+      return label + " — counting towards the national total";
+    }
     if (query.held_by && query.held_by.length) {
       // Two rules can flag one figure; settling this one does not settle those.
-      return "held out — also queried by " + esc(query.held_by.join(", "));
+      return label + " — counting, but also queried by " + esc(query.held_by.join(", "));
     }
-    return "held out until settled";
+    return label + " — counting towards the national total, and disclosed as such";
   }
 
   function queryActions(query) {
@@ -1279,45 +764,6 @@
     } catch (error) {
       fail(error, "Correction sheet");
     }
-  }
-
-  // -- states ---------------------------------------------------------------
-  async function renderStates() {
-    const [rankings, heat] = await Promise.all([
-      api.get("/dashboard/state-rankings", scopeParams()),
-      api.get("/analytics/heatmap", {
-        period: state.period,
-        cohort: state.cohort || undefined,
-        category: state.category || undefined,
-        limit_indicators: 14,
-      }),
-    ]);
-
-    $("state-table").innerHTML = table(
-      [
-        { label: "#", key: "rank", num: true },
-        { label: "State", key: "state_name" },
-        { label: "Cohort", key: "cohort_code" },
-        { label: "Avg achievement", num: true, render: (r) => pct(r.average_achievement_pct) },
-        { label: "KPIs on track", key: "indicators_on_track", num: true },
-        { label: "KPIs reported", key: "indicators_with_data", num: true },
-        { label: "DQA", num: true, render: (r) => num(r.dqa_score) },
-        { label: "Grade", render: (r) => badge(r.dqa_grade) },
-        { label: "Submitted", render: (r) => (r.reported ? "Yes" : badge("Not submitted")) },
-      ],
-      rankings
-    );
-
-    charts.heatmap("chart-heatmap", {
-      rows: heat.rows,
-      columns: heat.columns,
-      cells: heat.cells,
-      rowLabels: heat.row_labels,
-      columnLabels: heat.column_labels,
-      max: 150,
-      suffix: "%",
-      scaleLabel: "Achievement against state target (capped at 150%)",
-    });
   }
 
   // -- upload ---------------------------------------------------------------

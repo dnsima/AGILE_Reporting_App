@@ -19,8 +19,8 @@ from app.core.enums import PeriodType, Permission
 from app.core.errors import NotFoundError
 from app.core.events import event_bus
 from app.schemas.analytics import DashboardOverview
+from app.services import analysis_model, reference
 from app.services import dashboard as dashboard_service
-from app.services import reference
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -35,6 +35,61 @@ def _resolve_period(db, period_code: str | None):
     if period is None:
         raise NotFoundError("No reporting periods have been configured yet")
     return period
+
+
+@router.get(
+    "/analysis",
+    summary="The analysis model: every indicator, every state, one payload",
+    dependencies=[Depends(require(Permission.ANALYTICS_READ))],
+)
+def analysis(
+    db: DbSession,
+    principal: CurrentPrincipal,
+    period: str | None = None,
+) -> dict:
+    """The one payload every panel of the board reads.
+
+    There is deliberately no cohort or state parameter. The board used to
+    take five filters and assemble each panel from its own query under its
+    own subset, and the panels disagreed -- a reporting rate once read "18 of
+    11 states" because the denominator honoured a cohort filter the numerator
+    did not. Cohort is a dimension the charts cut by, and a single state is a
+    column in the table, so neither needs to narrow the whole board. The only
+    scope is the reporting period.
+    """
+    resolved = _resolve_period(db, period)
+    model = analysis_model.build(db, resolved.code)
+    payload = analysis_model.to_payload(model)
+
+    # A state PIU may read its own column and the national picture it sits in,
+    # but not another state's figures. Blanking the other columns keeps the
+    # national totals honest -- they are still every state's -- while the
+    # cells the reader may not see read as unreported.
+    if principal.is_state_scoped:
+        allowed = set(visible_state_codes(db, principal))
+        keep = [code in allowed for code in payload["state_codes"]]
+        if not all(keep):
+            for row in payload["indicators"]:
+                row["states"] = [
+                    value if visible else None
+                    for value, visible in zip(row["states"], keep, strict=True)
+                ]
+                row["display"] = [
+                    text if visible else "\u2014"
+                    for text, visible in zip(row["display"], keep, strict=True)
+                ]
+            visible_names = {
+                name for name, ok in zip(payload["states"], keep, strict=True) if ok
+            }
+            for row in payload["indicators"]:
+                row["flag_severity"] = {
+                    name: severity
+                    for name, severity in row["flag_severity"].items()
+                    if name in visible_names
+                }
+                row["flagged_states"] = sorted(row["flag_severity"])
+            payload["scoped_to"] = sorted(allowed)
+    return payload
 
 
 @router.get(

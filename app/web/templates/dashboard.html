@@ -1,158 +1,163 @@
 {% extends "base.html" %}
-{% block title %}Dashboard · {{ app_name }}{% endblock %}
+{% block title %}Performance dashboard · {{ app_name }}{% endblock %}
 {% block body %}
+{#
+  The board has one scope: the reporting period.
+
+  It used to carry five global filters -- period, cohort, state, category,
+  KPI -- applied to views that needed different subsets of them, and the
+  panels disagreed with each other. A reporting rate read "18 of 11 states"
+  because the denominator honoured the cohort filter and the numerator did
+  not. The NPCU's own dashboards, which this one is modelled on, carry no
+  global filter at all: cohort is a dimension two charts cut by, and a state
+  is a column in every table. That is the structure here.
+#}
 <div class="app-shell">
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark">A</span>
       <div>
-        <strong>{{ app_name }}</strong>
-        <span class="brand-sub">National M&amp;E dashboard · AGILE participating states</span>
+        <strong>AGILE Project &mdash; Performance Dashboard</strong>
+        <span class="brand-sub">Adolescent Girls Initiative for Learning and Empowerment &middot; Federal Ministry of Education, Nigeria</span>
       </div>
     </div>
     <div class="topbar-right">
+      <label class="period-pick">Period
+        <select id="filter-period"></select>
+      </label>
       <span class="live-dot" id="live-dot" title="Live connection status"></span>
-      <span class="live-label" id="live-label">connecting…</span>
-      <span class="user-chip" id="user-chip">—</span>
+      <span class="live-label" id="live-label">connecting&hellip;</span>
+      <span class="user-chip" id="user-chip">&mdash;</span>
       <button class="btn ghost" id="logout-btn" type="button">Sign out</button>
     </div>
   </header>
 
+  <div class="proj-meta">
+    <span><b>Project:</b> P170664 (World Bank)</span>
+    <span><b>Source:</b> KoBoToolbox state submissions</span>
+    <span id="analysis-caption"></span>
+    <span class="filter-status" id="filter-status"></span>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
   <nav class="tabs" role="tablist">
     <button class="tab active" data-view="overview" role="tab">Overview</button>
-    <button class="tab" data-view="kpis" role="tab">KPI performance</button>
-    <button class="tab" data-view="cohorts" role="tab">Cohorts</button>
-    <button class="tab" data-view="quality" role="tab">Data quality</button>
+    <button class="tab" data-view="pdo" data-c="PDO" role="tab">PDO Indicators</button>
+    <button class="tab" data-view="c1" data-c="C1" role="tab">Component 1</button>
+    <button class="tab" data-view="c2" data-c="C2" role="tab">Component 2</button>
+    <button class="tab" data-view="c3" data-c="C3" role="tab">Component 3</button>
+    <button class="tab" data-view="quality" data-c="DQ" role="tab">Data Quality</button>
     <button class="tab" data-view="queries" role="tab">Queries<span class="tab-count" id="tab-query-count" hidden></span></button>
-    <button class="tab" data-view="states" role="tab">States</button>
     <button class="tab" data-view="upload" role="tab">Upload</button>
     <button class="tab" data-view="reports" role="tab">Reports</button>
   </nav>
 
-  <section class="filters" id="filters">
-    <label>Period
-      <select id="filter-period"></select>
-    </label>
-    <label>Cohort
-      <select id="filter-cohort"><option value="">All cohorts</option></select>
-    </label>
-    <label>State
-      <select id="filter-state"><option value="">All states</option></select>
-    </label>
-    <label>Category
-      <select id="filter-category"><option value="">All categories</option></select>
-    </label>
-    <label>KPI
-      <select id="filter-indicator"></select>
-    </label>
-    <button class="btn ghost" id="reset-filters" type="button">Reset</button>
-    <span class="filter-status" id="filter-status"></span>
-  </section>
-
   <main class="content">
-    <!-- Overview ---------------------------------------------------------->
+    <!-- Overview ------------------------------------------------------------>
     <section class="view active" id="view-overview">
-      <div class="tile-grid" id="kpi-tiles"></div>
-      <div class="panel-grid">
-        <article class="panel">
-          <header><h2>National DQA by dimension</h2><span class="hint">Seven-dimension scorecard</span></header>
-          <div id="chart-dqa-dimensions" class="chart"></div>
+      <div class="comp-banner cb-pdo">
+        <h2>Programme Overview</h2>
+        <p>Achievement against target across all components, and the comparison between financing cohorts.</p>
+      </div>
+      <div class="grid2">
+        <article class="card">
+          <h3>Achievement against target &mdash; all targeted indicators</h3>
+          <div class="chart-box tall" id="chScore"></div>
         </article>
-        <article class="panel">
-          <header><h2>Cohort achievement</h2><span class="hint">Average KPI achievement vs target</span></header>
-          <div id="chart-cohort-achievement" class="chart"></div>
+        <article class="card">
+          <h3>Girls enrolled (JS1&ndash;SS3) by state</h3>
+          <div class="chart-box tall" id="chEnrol"></div>
+          <p class="note">A state carrying a data quality flag is coloured as flagged, not as large.</p>
         </article>
       </div>
-      <article class="panel">
-        <header><h2>Reporting status</h2><span class="hint" id="reporting-caption"></span></header>
-        <div id="reporting-status"></div>
+      <div class="grid2">
+        <article class="card">
+          <h3>Completion rates by financing cohort</h3>
+          <div class="chart-box" id="chCohortRate"></div>
+        </article>
+        <article class="card">
+          <h3>Demand-side reach by financing cohort</h3>
+          <div class="chart-box" id="chCohortReach"></div>
+        </article>
+      </div>
+      <article class="card">
+        <h3>Completion rates by state &mdash; overall, JS3 and SS3</h3>
+        <div class="chart-box tall" id="chComplete"></div>
       </article>
-      <article class="panel">
-        <header><h2>Live activity</h2><span class="hint">Dashboard refreshes as states submit</span></header>
-        <ul class="activity" id="activity-feed"><li class="muted">Waiting for events…</li></ul>
+      <article class="card">
+        <h3>Live activity</h3>
+        <ul class="activity" id="activity-feed"><li class="muted">Waiting for events&hellip;</li></ul>
       </article>
     </section>
 
-    <!-- KPI performance --------------------------------------------------->
-    <section class="view" id="view-kpis">
-      <div class="panel-grid">
-        <article class="panel">
-          <header><h2 id="trend-title">Trend</h2><span class="hint">Longitudinal series for the selected KPI</span></header>
-          <div id="chart-trend" class="chart"></div>
-        </article>
-        <article class="panel">
-          <header><h2>State contribution</h2><span class="hint">Share of the national result</span></header>
-          <div id="chart-contribution" class="chart"></div>
-        </article>
+    <!-- PDO ------------------------------------------------------------------>
+    <section class="view" id="view-pdo">
+      <div class="comp-banner cb-pdo">
+        <h2>Project Development Objective</h2>
+        <p>Access, retention, completion and learning outcomes for adolescent girls &mdash; the primary measure of project effectiveness.</p>
       </div>
-      <article class="panel">
-        <header>
-          <h2>Three-layer analysis</h2>
-          <span class="hint" id="indicator-caption"></span>
-        </header>
-        <div id="indicator-analysis"></div>
-      </article>
-      <article class="panel">
-        <header><h2>Scorecard — all indicators</h2><span class="hint">Value, target, achievement and status</span></header>
-        <div class="table-scroll" id="scorecard-table"></div>
-      </article>
+      <article class="card"><h3>PDO targeted indicators vs target</h3><div class="chart-box" id="chPDO"></div></article>
+      <div id="t-PDO"></div>
     </section>
 
-    <!-- Cohorts ------------------------------------------------------------>
-    <section class="view" id="view-cohorts">
-      <article class="panel">
-        <header><h2>Cohort comparison</h2><span class="hint">KPI, DQA, contribution, timeliness and completeness</span></header>
-        <div class="table-scroll" id="cohort-table"></div>
-      </article>
-      <div class="panel-grid">
-        <article class="panel">
-          <header><h2>Reporting rate by cohort</h2></header>
-          <div id="chart-cohort-reporting" class="chart"></div>
-        </article>
-        <article class="panel">
-          <header><h2>DQA score by cohort</h2></header>
-          <div id="chart-cohort-dqa" class="chart"></div>
-        </article>
+    <!-- Component 1 ---------------------------------------------------------->
+    <section class="view" id="view-c1">
+      <div class="comp-banner cb-c1">
+        <h2>Component 1 &mdash; Creating Safe and Accessible Learning Spaces</h2>
+        <p>Classroom construction and rehabilitation, WASH facilities, School Improvement Grants, and school safety systems.</p>
       </div>
-      <article class="panel">
-        <header><h2>Within-cohort ranking</h2><span class="hint">Select a cohort in the filter bar</span></header>
-        <div class="table-scroll" id="within-cohort-table"></div>
-      </article>
+      <article class="card"><h3>Infrastructure progress vs target</h3><div class="chart-box" id="chC1"></div></article>
+      <div id="t-C1"></div>
     </section>
 
-    <!-- Data quality ------------------------------------------------------->
+    <!-- Component 2 ---------------------------------------------------------->
+    <section class="view" id="view-c2">
+      <div class="comp-banner cb-c2">
+        <h2>Component 2 &mdash; Fostering an Enabling Environment for Girls</h2>
+        <p>Community mobilisation, scholarships and social safety net, life skills, digital literacy, and non-formal education.</p>
+      </div>
+      <article class="card"><h3>Demand-side and empowerment progress vs target</h3><div class="chart-box" id="chC2"></div></article>
+      <div id="t-C2"></div>
+    </section>
+
+    <!-- Component 3 ---------------------------------------------------------->
+    <section class="view" id="view-c3">
+      <div class="comp-banner cb-c3">
+        <h2>Component 3 &mdash; Project Management and System Strengthening</h2>
+        <p>Policy adoption and implementation, grievance redress, and climate and environmental programming.</p>
+      </div>
+      {# Eighteen states across two series needs the full width; in a half-width
+         card the chart ran off the right and five states were simply not seen. #}
+      <article class="card">
+        <h3>Grievances received vs addressed by state</h3>
+        <div class="chart-box" id="chGRM"></div>
+        <p class="note">The gap between the two bars is the state&rsquo;s unresolved caseload.</p>
+      </article>
+      <article class="card">
+        <h3>National gender education policy status</h3>
+        <div class="chart-box" id="chPolicy"></div>
+      </article>
+      <div id="t-C3"></div>
+    </section>
+
+    <!-- Data quality --------------------------------------------------------->
     <section class="view" id="view-quality">
-      <article class="panel">
-        <header><h2 id="dqa-panel-title">National DQA summary</h2><span class="hint" id="dqa-caption"></span></header>
-        <div id="dqa-summary"></div>
-      </article>
-      <article class="panel">
-        <header><h2>State DQA scorecards</h2></header>
-        <div class="table-scroll" id="dqa-table"></div>
-      </article>
-      <article class="panel">
-        <header><h2>DQA heatmap</h2><span class="hint">States × reporting periods</span></header>
-        <div class="chart" id="chart-dqa-heatmap"></div>
-      </article>
-      <article class="panel">
-        <header><h2>Most frequent findings</h2></header>
-        <div class="table-scroll" id="common-issues"></div>
-      </article>
-      <article class="panel">
-        <header>
-          <h2>Tracker reconciliation</h2>
-          <span class="hint" id="reconciliation-caption">Monthly tracker against the quarterly framework</span>
-        </header>
-        <div id="reconciliation-summary"></div>
-        <div class="table-scroll" id="reconciliation-table"></div>
-      </article>
-      <article class="panel">
-        <header>
-          <h2>Figures the two streams disagree on</h2>
-          <span class="hint">What the tracker implies, and what the quarterly return says</span>
-        </header>
-        <div class="table-scroll" id="reconciliation-lines"></div>
-      </article>
+      <div class="comp-banner cb-dq">
+        <h2>Data Quality Flags</h2>
+        <p>Every open finding against this period&rsquo;s returns. Each one is also a query raised with the
+           state that reported it &mdash; see the Queries tab to work them through to correction.</p>
+      </div>
+      <div class="legend">
+        <span><i class="sw sw-C"></i> Critical &mdash; the figure cannot be true as reported</span>
+        <span><i class="sw sw-H"></i> Review &mdash; large or unexplained movement, or a coverage gap</span>
+      </div>
+      <p class="note">
+        Flagged figures are <b>not</b> removed from the national totals. Excluding them made this
+        platform&rsquo;s totals disagree with the NPCU&rsquo;s own published report. A flagged figure
+        counts, and is labelled, so a reader can see both what it contributes and what it distorts.
+      </p>
+      <div id="dqList"></div>
     </section>
 
     <!-- Queries -------------------------------------------------------------->
@@ -191,18 +196,6 @@
           <span class="hint">Select a flagged figure above</span>
         </header>
         <div id="query-detail" class="muted">Nothing selected.</div>
-      </article>
-    </section>
-
-    <!-- States -------------------------------------------------------------->
-    <section class="view" id="view-states">
-      <article class="panel">
-        <header><h2>State performance ranking</h2><span class="hint">Average achievement across indicators in scope</span></header>
-        <div class="table-scroll" id="state-table"></div>
-      </article>
-      <article class="panel">
-        <header><h2>Performance heatmap</h2><span class="hint">States × KPIs, coloured by achievement</span></header>
-        <div class="chart" id="chart-heatmap"></div>
       </article>
     </section>
 
@@ -320,5 +313,6 @@
 {% block scripts %}
 <script src="/static/js/charts.js"></script>
 <script src="/static/js/api.js"></script>
+<script src="/static/js/analysis.js"></script>
 <script src="/static/js/dashboard.js"></script>
 {% endblock %}

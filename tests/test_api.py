@@ -643,7 +643,15 @@ class TestDashboardPages:
 
     def test_pages_render(self, client):
         assert "Sign in" in client.get("/login").text
-        assert "National M&amp;E dashboard" in client.get("/dashboard").text
+        page = client.get("/dashboard").text
+        assert "AGILE Project &mdash; Performance Dashboard" in page
+        # The board has one scope. A cohort or state filter over the whole
+        # board is what made a reporting rate read "18 of 11 states".
+        assert 'id="filter-period"' in page
+        # The Queries tab keeps its own state picker -- that narrows a list of
+        # queries, not the national figures every other panel reports.
+        for gone in ("filter-cohort", "filter-state", "filter-category", "filter-indicator"):
+            assert f'id="{gone}"' not in page, f"{gone} is back; the board has one scope"
 
     def test_static_assets_are_served(self, client):
         for path in ["/static/css/app.css", "/static/js/charts.js", "/static/js/dashboard.js"]:

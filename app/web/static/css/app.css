@@ -377,3 +377,161 @@ tr.query-row.overdue td.due { color: var(--bad); font-weight: 700; }
 /* A capped grade always travels with its reason. */
 .grade-note { margin: 12px 0 0; padding: 9px 12px; border-radius: 8px;
   background: var(--warn-bg); color: var(--warn); font-size: .8rem; line-height: 1.45; }
+
+/* ==========================================================================
+   The analysis board
+   --------------------------------------------------------------------------
+   Modelled on the NPCU's own quarterly dashboard, so a reader who knows that
+   workbook can read this screen without being taught it. Flag colours are
+   never the only signal: every flagged cell also carries a coloured border,
+   and every flagged row a dot beside its name, because a colour alone is
+   invisible to a reader with a colour vision deficiency and to anyone
+   printing this in grey.
+   ========================================================================== */
+:root {
+  --flag-critical-bg: #f7d0d0; --flag-critical-ink: #8a1010; --flag-critical-line: #b02020;
+  --flag-high-bg: #fadfc4;     --flag-high-ink: #7d3d06;     --flag-high-line: #c55a11;
+  --flag-medium-bg: #fbeab5;   --flag-medium-ink: #6b5600;   --flag-medium-line: #bf9000;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --flag-critical-bg: #45191a; --flag-critical-ink: #f2a3a0; --flag-critical-line: #c0504a;
+    --flag-high-bg: #432a14;    --flag-high-ink: #edb886;    --flag-high-line: #c07033;
+    --flag-medium-bg: #3b3312;  --flag-medium-ink: #e5cd7d;  --flag-medium-line: #a8892a;
+  }
+}
+
+/* -- header strip -------------------------------------------------------- */
+.period-pick { display: flex; align-items: center; gap: 6px; font-size: .74rem;
+  color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+.period-pick select { font-size: .82rem; padding: 4px 8px; text-transform: none;
+  letter-spacing: 0; font-weight: 500; }
+
+.proj-meta { display: flex; flex-wrap: wrap; gap: 6px 20px; padding: 8px 18px;
+  font-size: .76rem; color: var(--text-muted); border-bottom: 1px solid var(--border);
+  background: var(--surface-2); }
+.proj-meta b { color: var(--text); font-weight: 600; }
+
+/* -- headline tiles ------------------------------------------------------ */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px; padding: 16px 18px 4px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 14px; border-top: 3px solid var(--brand-2); }
+.kpi.good { border-top-color: var(--status-good); }
+.kpi.warn { border-top-color: var(--status-warning); }
+.kpi.bad  { border-top-color: var(--status-critical); }
+.kpi-lbl { font-size: .68rem; color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: .05em; font-weight: 700; margin-bottom: 5px; }
+.kpi-val { font-size: 1.6rem; font-weight: 700; color: var(--brand); line-height: 1.15; }
+.kpi-note { font-size: .72rem; margin-top: 4px; font-weight: 600; color: var(--text-muted); }
+.kpi-note.good { color: var(--ok); }
+.kpi-note.warn { color: var(--warn); }
+.kpi-note.bad  { color: var(--bad); }
+
+/* -- component banner ---------------------------------------------------- */
+.comp-banner { padding: 12px 16px; border-radius: var(--radius); margin-bottom: 16px;
+  color: #fff; background: var(--brand); }
+.comp-banner h2 { font-size: 1.05rem; font-weight: 700; margin: 0 0 3px; color: #fff; }
+.comp-banner p { font-size: .8rem; opacity: .93; margin: 0; }
+.cb-c1 { background: #b4540f; } .cb-c2 { background: #5c2b86; }
+.cb-c3 { background: #2f5320; } .cb-dq { background: #8f2727; }
+
+/* -- cards and charts ---------------------------------------------------- */
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 16px; margin-bottom: 18px; }
+.card { background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 16px; margin-bottom: 16px; }
+.card h3 { font-size: .85rem; font-weight: 700; color: var(--brand); margin: 0 0 12px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+/* Tall enough to say something when there is nothing to draw, and otherwise
+   the height the chart itself needs. A fixed 300px left a four-bar chart
+   sitting in half a screen of white space. */
+.chart-box { position: relative; min-height: 130px; overflow-x: auto; }
+.chart-box.tall { min-height: 300px; }
+
+/* -- the indicator tables ------------------------------------------------ */
+.tbl-wrap { background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: auto; max-height: 620px; }
+.tbl-wrap table { border-collapse: collapse; width: 100%; font-size: .74rem; }
+.tbl-wrap thead th { background: var(--brand); color: #fff; padding: 8px 7px;
+  text-align: center; font-weight: 600; font-size: .68rem; position: sticky; top: 0;
+  z-index: 3; white-space: nowrap; }
+.tbl-wrap thead th.left { text-align: left; }
+.tbl-wrap thead th.sticky-l { left: 0; z-index: 5; }
+.tbl-wrap tbody td { padding: 6px 7px; border-bottom: 1px solid var(--border);
+  text-align: right; white-space: nowrap; }
+.tbl-wrap tbody td.left { text-align: left; white-space: normal; min-width: 240px; }
+.tbl-wrap tbody td.code { text-align: center; font-weight: 700; color: var(--brand-2); }
+.tbl-wrap tbody td.type { text-align: left; color: var(--text-muted); font-size: .68rem; }
+.tbl-wrap tbody tr:nth-child(even) { background: var(--surface-2); }
+.tbl-wrap td.sticky-l, .tbl-wrap th.sticky-l { position: sticky; left: 0;
+  background: var(--surface); z-index: 2; }
+.tbl-wrap tbody tr:nth-child(even) td.sticky-l { background: var(--surface-2); }
+.natcol { background: var(--info-bg) !important; font-weight: 700; }
+.tgtcol { background: var(--warn-bg) !important; color: var(--warn); font-weight: 600; }
+.pctcol { font-weight: 700; }
+.p-good { background: var(--ok-bg) !important; color: var(--ok); }
+.p-warn { background: var(--warn-bg) !important; color: var(--warn); }
+.p-bad  { background: var(--bad-bg) !important; color: var(--bad); }
+.tbl-wrap td.yes { color: var(--ok); font-weight: 700; }
+.tbl-wrap td.no  { color: var(--bad); font-weight: 700; }
+
+/* A flagged cell: fill, ink and an inset border, so it survives greyscale. */
+.fC { background: var(--flag-critical-bg) !important; color: var(--flag-critical-ink);
+  font-weight: 700; box-shadow: inset 0 0 0 2px var(--flag-critical-line); }
+.fH { background: var(--flag-high-bg) !important; color: var(--flag-high-ink);
+  font-weight: 700; box-shadow: inset 0 0 0 2px var(--flag-high-line); }
+.fM { background: var(--flag-medium-bg) !important; color: var(--flag-medium-ink);
+  font-weight: 700; box-shadow: inset 0 0 0 2px var(--flag-medium-line); }
+
+.flag-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin-left: 4px; vertical-align: middle; }
+.fd-C { background: var(--flag-critical-line); }
+.fd-H { background: var(--flag-high-line); }
+.fd-M { background: var(--flag-medium-line); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 10px 0 14px;
+  font-size: .72rem; align-items: center; color: var(--text-muted); }
+.legend span { display: flex; align-items: center; gap: 5px; }
+.sw { width: 14px; height: 14px; border-radius: 3px; display: inline-block;
+  border: 1px solid rgba(0, 0, 0, .18); }
+.sw-C { background: var(--flag-critical-bg); border-color: var(--flag-critical-line); }
+.sw-H { background: var(--flag-high-bg); border-color: var(--flag-high-line); }
+.sw-M { background: var(--flag-medium-bg); border-color: var(--flag-medium-line); }
+.sw-good { background: var(--ok-bg); border-color: var(--ok); }
+.sw-warn { background: var(--warn-bg); border-color: var(--warn); }
+.sw-bad  { background: var(--bad-bg); border-color: var(--bad); }
+
+/* -- the data quality register ------------------------------------------- */
+.dq-item { background: var(--surface); border: 1px solid var(--border);
+  border-left-width: 5px; border-radius: var(--radius); padding: 11px 14px; margin-bottom: 9px; }
+.dq-item.C { border-left-color: var(--flag-critical-line); }
+.dq-item.H { border-left-color: var(--flag-high-line); }
+.dq-item.M { border-left-color: var(--flag-medium-line); }
+.dq-head { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; margin-bottom: 5px; }
+.sev { font-size: .62rem; font-weight: 700; padding: 2px 8px; border-radius: 3px;
+  letter-spacing: .05em; }
+.sev.C { background: var(--flag-critical-bg); color: var(--flag-critical-ink); }
+.sev.H { background: var(--flag-high-bg); color: var(--flag-high-ink); }
+.sev.M { background: var(--flag-medium-bg); color: var(--flag-medium-ink); }
+.dq-code { font-weight: 700; color: var(--brand-2); font-size: .78rem; }
+.dq-ind { font-weight: 600; font-size: .78rem; }
+.dq-states { font-size: .72rem; color: var(--bad); font-weight: 600; }
+.dq-txt { font-size: .78rem; color: var(--text); }
+
+.note { font-size: .72rem; color: var(--text-muted); margin-top: 9px; }
+
+@media (max-width: 820px) {
+  .grid2 { grid-template-columns: 1fr; }
+  .tbl-wrap td.sticky-l, .tbl-wrap th.sticky-l { position: static; }
+  .proj-meta { font-size: .7rem; }
+}
+.dq-detail { margin: 7px 0 0; padding-left: 18px; font-size: .74rem; color: var(--text-muted); }
+.dq-detail li { margin-bottom: 2px; }
+.dq-detail b { color: var(--text); font-weight: 600; }
+
+/* A chart inside the analysis board renders at its natural width and scrolls
+   if it must. Scaling an eighteen-state chart down to fit a column is what
+   made the state names run together into one word. */
+.chart-box svg { display: block; height: auto; overflow: visible; max-width: none; }
+.chart-box .viz-legend { margin-top: 8px; }

@@ -123,10 +123,16 @@ class TestWorklist:
         assert row["is_open"] is True
         assert row["due_date"] is not None
 
-    def test_a_held_figure_says_so(self, client, npcu_headers, flagged):
+    def test_a_flagged_figure_is_labelled_not_removed(self, client, npcu_headers, flagged):
+        """The figure is disclosed as unfit, and still carries its value.
+
+        It counts towards the national total either way. Holding the doubtful
+        figures out is what made this platform's totals disagree with the
+        NPCU's own published report.
+        """
         rows = _get(client, npcu_headers, "/api/v1/queries", period="2026-Q1")
         row = next(r for r in rows if r["id"] == flagged["query_id"])
-        assert row["is_quarantined"] is True
+        assert row["disclosure"] == "UNFIT"
         assert row["current_value"] == 342.0
 
     def test_a_state_sees_only_its_own_queries(self, client, state_headers, db, flagged):
@@ -575,7 +581,7 @@ class TestSharedFigures:
         extra = self._both(db, flagged)
         body = _get(client, npcu_headers, f"/api/v1/queries/{flagged['query_id']}")
         assert body["held_by"] == [f"Q-{extra.id}"]
-        assert body["is_quarantined"] is True
+        assert body["disclosure"] == "UNFIT"
 
     def test_settling_one_query_leaves_the_figure_held_by_the_other(
         self, client, state_headers, npcu_headers, db, flagged

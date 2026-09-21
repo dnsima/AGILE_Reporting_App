@@ -41,7 +41,7 @@ from app.schemas.query import (
     RespondRequest,
     ReviewRequest,
 )
-from app.services import corrections, reference
+from app.services import corrections, disclosure, reference
 from app.services import queries as query_service
 
 router = APIRouter(prefix="/queries", tags=["Data queries"])
@@ -133,7 +133,7 @@ def _query_read(db, query: DataQuery) -> QueryRead:
         detail=query.detail,
         reported_value=query.reported_value,
         current_value=figure.effective_value if figure else None,
-        is_quarantined=bool(figure and not figure.is_valid),
+        disclosure=str(disclosure.status_of(figure)) if figure else "CLEAN",
         status=query.status,
         resolution=query.resolution,
         resolution_note=query.resolution_note,
