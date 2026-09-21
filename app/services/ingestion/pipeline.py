@@ -9,6 +9,8 @@ scores below the configured DQA minimum, is left in ``REJECTED`` status with
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,14 +23,24 @@ from app.core.errors import ConflictError, IngestionError, ValidationError
 from app.core.events import event_bus
 from app.core.logging_config import get_logger
 from app.core.security import file_digest
-from app.models import Indicator, IndicatorValue, ReportingPeriod, State, Submission, User
+from app.models import (
+    DataQuery,
+    Indicator,
+    IndicatorValue,
+    ReportingPeriod,
+    State,
+    Submission,
+    User,
+)
 from app.schemas.ingestion import (
     ColumnMapping,
     IngestionDiagnostics,
     ManualSubmission,
+    ManualValueEntry,
 )
 from app.schemas.validation import ValidationSummary
 from app.services import audit, exposure, periods, queries, reference
+from app.services.ingestion import kobo
 from app.services.ingestion.mapper import MappedValue, map_rows
 from app.services.ingestion.parser import parse_upload
 from app.services.validation import run_validation
@@ -505,6 +517,182 @@ def ingest_manual(
         },
     )
     return submission, diagnostics, summary
+
+
+# --------------------------------------------------------------------------
+# The Kobo backend export
+# --------------------------------------------------------------------------
+@dataclass
+class KoboStateResult:
+    """What became of one state's return within a Kobo export."""
+
+    state_name: str
+    state_code: str | None
+    submission_id: int | None = None
+    status: str | None = None
+    values: int = 0
+    findings: int = 0
+    #: Queries open against this return once it was loaded -- the findings
+    #: this load raised plus any still open against the version it replaced,
+    #: because a re-file is not a resolution.
+    open_queries: int = 0
+    missing_sections: list[str] = dataclass_field(default_factory=list)
+    unreadable: list[str] = dataclass_field(default_factory=list)
+    skipped_reason: str | None = None
+
+    @property
+    def loaded(self) -> bool:
+        return self.submission_id is not None
+
+
+@dataclass
+class KoboIngestResult:
+    """The outcome of loading one quarter's export."""
+
+    period_code: str
+    rows: int
+    columns_matched: int
+    results: list[KoboStateResult] = dataclass_field(default_factory=list)
+    #: Question columns matched only after punctuation was forgiven, worth
+    #: seeing because they mean the form and the framework have started to
+    #: drift even though this load survived it.
+    relaxed_columns: list[str] = dataclass_field(default_factory=list)
+    #: Reported indicators no column in the export asks about.
+    absent_indicators: list[str] = dataclass_field(default_factory=list)
+
+    @property
+    def loaded(self) -> list[KoboStateResult]:
+        return [r for r in self.results if r.loaded]
+
+    @property
+    def skipped(self) -> list[KoboStateResult]:
+        return [r for r in self.results if not r.loaded]
+
+    @property
+    def findings(self) -> int:
+        return sum(r.findings for r in self.loaded)
+
+    @property
+    def open_queries(self) -> int:
+        return sum(r.open_queries for r in self.loaded)
+
+
+def ingest_kobo_export(
+    db: Session,
+    *,
+    content: bytes,
+    filename: str,
+    period_code: str,
+    actor: User | None = None,
+    auto_approve: bool = False,
+    raise_queries: bool = True,
+    only_states: set[str] | None = None,
+    submitted_at: datetime | None = None,
+) -> KoboIngestResult:
+    """Load one quarter's Kobo backend export: every state, in one pass.
+
+    This is the platform's front door. States file on Kobo, the NPCU downloads
+    the backend dataset, and it arrives here as one file carrying eighteen
+    returns split across four form sections each. Each state becomes one
+    submission, validated on its own and queried on its own, so a state that
+    filed badly does not hold up seventeen that did not.
+
+    The period is required rather than inferred. The export's reporting dates
+    straddle the quarter end -- states file in the fortnight after -- so a date
+    would put half a quarter's returns in the following one.
+    """
+    if len(content) > settings.max_upload_bytes:
+        raise IngestionError(
+            f"File is larger than the {settings.max_upload_mb} MB upload limit."
+        )
+
+    period = reference.get_period_by_code(db, period_code)
+    indicators = list(db.scalars(select(Indicator).where(Indicator.is_active.is_(True))))
+    if not indicators:
+        raise IngestionError(
+            "No indicators are configured. Seed the indicator catalogue before ingesting data."
+        )
+
+    export = kobo.read_export(content, filename, indicators)
+    result = KoboIngestResult(
+        period_code=period.code,
+        rows=export.row_count,
+        columns_matched=len(export.resolution.matched),
+        relaxed_columns=list(export.resolution.relaxed),
+        absent_indicators=list(export.resolution.absent),
+    )
+
+    wanted = {code.strip().upper() for code in only_states} if only_states else None
+
+    for ret in export.returns:
+        state = reference.get_state_by_code(db, ret.state_name, required=False)
+        row = KoboStateResult(
+            state_name=ret.state_name,
+            state_code=state.code if state else None,
+            missing_sections=ret.missing_sections,
+            unreadable=ret.unreadable[:20],
+        )
+        result.results.append(row)
+
+        if state is None:
+            row.skipped_reason = (
+                f"'{ret.state_name}' is not a participating state in this platform."
+            )
+            logger.warning("kobo export names an unknown state", extra={"state": ret.state_name})
+            continue
+        if wanted is not None and state.code.upper() not in wanted:
+            row.skipped_reason = "Not among the states requested for this load."
+            continue
+        if not ret.values:
+            row.skipped_reason = "The return carries no readable answer."
+            continue
+
+        entries = [
+            ManualValueEntry(indicator_code=code, value=value)
+            for code, value in ret.values.items()
+        ]
+        submission, _diagnostics, summary = ingest_manual(
+            db,
+            ManualSubmission(
+                state_code=state.code,
+                period_code=period.code,
+                values=entries,
+                notes=ret.note,
+            ),
+            actor=actor,
+            auto_approve=auto_approve,
+            # The date the state filed on Kobo, not the date the NPCU got
+            # round to downloading it, or every return looks late.
+            submitted_at=submitted_at or ret.submitted_at or ret.reported_on,
+            raise_queries=raise_queries,
+        )
+        submission.source_file_name = filename
+        submission.template_profile = "kobo"
+        db.flush()
+
+        row.submission_id = submission.id
+        row.status = submission.status
+        row.values = len(entries)
+        row.findings = summary.error_count + summary.warning_count
+        row.open_queries = (
+            db.scalar(
+                select(func.count(DataQuery.id)).where(
+                    DataQuery.submission_id == submission.id
+                )
+            )
+            or 0
+        )
+
+    logger.info(
+        "ingested kobo export",
+        extra={
+            "period": period.code,
+            "states_loaded": len(result.loaded),
+            "states_skipped": len(result.skipped),
+            "findings": result.findings,
+        },
+    )
+    return result
 
 
 # --------------------------------------------------------------------------
