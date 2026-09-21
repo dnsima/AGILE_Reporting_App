@@ -112,7 +112,37 @@ calendar, and 26 validation rules. It prints the administrator sign-in.
 
 ### 4. Load data
 
-**Either** your real returns — point each flag at wherever the workbook is:
+**The normal route — the Kobo backend export.** States file the AGILE Results
+Framework form on KoBoToolbox; you download the quarter's backend dataset and
+load it here. That is the entry point, and nothing needs re-keying:
+
+```powershell
+python -m scripts.load_kobo --period 2026-Q2 `
+    --file "C:\AGILE\Q2_2026_AGILE_PF_Backend_Dataset.xlsx" --dry-run
+```
+
+Start with `--dry-run`. It reads the file, resolves every question column to an
+indicator and tells you what it found, without loading anything. If a column
+does not match the results framework it says which, and refuses — the form and
+the framework have drifted apart and that is worth knowing before a figure
+lands in the wrong field. Drop `--dry-run` to load it:
+
+```powershell
+python -m scripts.load_kobo --period 2026-Q2 `
+    --file "C:\AGILE\Q2_2026_AGILE_PF_Backend_Dataset.xlsx" --approve
+```
+
+Each state becomes one submission, validated on its own, with every finding
+raised as a query against the state that reported it. A state that filed badly
+does not hold up the seventeen that did not. `--approve` lets the figures enter
+the national totals now rather than waiting on review; the queries stand either
+way.
+
+The `--period` is required. States file in the fortnight after a quarter ends,
+so the dates inside the file would put half the returns in the following
+quarter.
+
+**Or** an NPCU analysis workbook, if you are loading history:
 
 ```powershell
 python -m scripts.load_npcu_models `
@@ -197,6 +227,27 @@ uvicorn app.main:app --reload
 National totals change the moment you start the new version, before you
 re-validate anything: figures under query are no longer held out of them. That
 is the point of the release, not a fault.
+
+### What looks different
+
+**There is no DQA score and no grade.** They are gone, not hidden. A pass rate
+over automated checks sat near 100 for any plausible return and read
+"Excellent" beside a state that had lost 5,833 schools between quarters. In
+their place each return carries a verdict — FIT, FIT WITH NOTES, NOT FIT FOR
+USE — with a note saying why. Scoring a return is work for a data quality
+assessment with a field visit behind it, and will be designed as its own
+process.
+
+**The dashboard has no filter bar.** It carried five global filters applied to
+panels that needed different subsets of them, and the panels disagreed: a
+reporting rate once read "18 of 11 states". The board now has one scope, the
+reporting period, chosen at the top right. Cohort is a dimension two overview
+charts cut by; a state is a column in every table.
+
+**There is a Download the analysis workbook button**, in the strip under the
+header. It builds the workbook you would otherwise assemble by hand — Cover,
+National Summary, PDO, the three components, Data Quality Flags and a Full Data
+Table — from the same figures the screen is showing.
 
 ### Backing up first
 
